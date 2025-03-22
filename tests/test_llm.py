@@ -4,24 +4,24 @@ from src.llm import DeepSeekLLM
 @pytest.mark.asyncio
 async def test_real_deepseek_request():
     llm = DeepSeekLLM()
-    result = await llm.parse_calendar_event("Встреча с клиентом завтра в 15:00 в офисе")
+    result = await llm.parse_calendar_event("Meeting with client tomorrow at 15:00 in the office")
     
-    # Проверяем, что получили ответ
+    # Check that we got a response
     assert result is not None
     
-    # Проверяем структуру ответа
+    # Check response structure
     assert "title" in result
     assert "start_time" in result
     assert "end_time" in result
     assert "description" in result
     assert "location" in result
     
-    # Проверяем, что даты в ISO формате, если они не null
-    assert "T" in result["start_time"]  # start_time обязательно должно быть
-    if result["end_time"]:  # end_time может быть null
+    # Check that dates are in ISO format if they are not null
+    assert "T" in result["start_time"]  # start_time must be present
+    if result["end_time"]:  # end_time can be null
         assert "T" in result["end_time"]
     
-    # Выводим результат для проверки
+    # Print result for verification
     print("\nParsed event:")
     print(f"Title: {result['title']}")
     print(f"Start: {result['start_time']}")
