@@ -78,20 +78,21 @@ Input date parsing logic:
 Required output fields:
 - title: event title. Format based on event type (keep it as short as possible):
     * For haircuts/beauty: "Парикмахер"
-    * For doctor appointments: "//doctor_type//" (use genitive case, e.g. "Дерматолог", "Психолог", "Хирург", "Стоматолог")
-    * If you're not sure which doctor it is, or it's unclear from the text, then just write “Доктор //doctor_name//” or "Прием //doctor_name//"
+    * For doctor appointments: "Доктор //full_name//" (if doctor type is not specified) or "//doctor_type//" (use genitive case, e.g. "Дерматолог", "Психолог", "Хирург", "Стоматолог")
     * For masterclasses: "//short_title//" (without prefixes like "Онлайн мастер-класс:")
     * ALWAYS use Russian language! (e.g. "Встреча с клиентом")
 - start_time: event start time (in ISO format)
 - end_time: event end time (in ISO format). If duration is specified, use it, otherwise set to 1 hour after start_time
 - description: detailed description of the event:
-    * For meetings: use the exact text from input that describes the meeting
-    * For doctor appointments: "Прием у //doctor_type// //doctor_name//" (use genitive case for doctor name)
+    * For meetings: use the exact text from input that describes the meeting (including location if mentioned)
+    * For doctor appointments: "Прием у доктора //surname//" (do not decline the word "доктора" or surname, do not add dot at the end)
     * For online sessions: "Сессия с психологом //psychologist_name//" (use instrumental case for psychologist name)
     * For masterclasses and courses: use the full title without prefixes
+    * For events with speakers/guests: "Встреча с //guest_name//, //guest_role//. //short_topic//" (keep it under 100 characters)
     * ALWAYS use Russian language! 
+    * ALWAYS keep descriptions short and concise (under 100 characters)
 - location: event location. Format based on event type:
-    * For physical locations: "//place_name//, //address//" (include name if available)
+    * For physical locations: "//address//" (do not include clinic name at the start unless it's part of the official address)
     * For online events: //link// or, if link is not available, "Онлайн" (if it's an online event)
     * ALWAYS use Russian language! 
 - result: boolean, true if event was successfully parsed, false if parsed failed, there is not enough information
