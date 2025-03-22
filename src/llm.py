@@ -2,6 +2,7 @@ import json
 import httpx
 from loguru import logger
 from typing import Dict, Any, Optional
+from datetime import datetime
 from .config import get_settings
 
 class DeepSeekLLM:
@@ -44,34 +45,70 @@ class DeepSeekLLM:
             return None
 
     async def parse_calendar_event(self, text: str) -> Optional[Dict[str, Any]]:
-        system_prompt = """You are a calendar event parser. Extract the following information from the text and return it in valid JSON format.
-        Current date and time: 2024-03-22 16:30:00
+        current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        system_prompt = f"""You are a calendar event parser. Extract the following information from the text and return it in valid JSON format.
+        Current date and time: {current_datetime}
+
+        ВНИМАНИЕ! За каждую ошибку с тебя списывается 200 баллов. У тебя осталось 600 баллов. Будь предельно внимателен!
 
         Date parsing logic:
         1. If no date is specified, use current day
-        2. If only day is specified (e.g. "15th"):
+        2. If only day is specified (e.g. "15th" or "15-го"):
             - If day is in the past for current month, use next month
-            - Otherwise use current month
+            - If day is today or in the future for current month, use current month
+            - Example: if today is March 15, 2024, and event is "15-го", use March 15, 2024
+            - Example: if today is March 20, 2024, and event is "15-го", use April 15, 2024
         3. If month is specified (e.g. "September"):
-            - If month is in the past for current year, use next year
+            - Month without specific day is NOT enough information, return result: false
+            - If month with day is in the past for current year, use next year
             - Otherwise use current year
+        4. If date is in the past (including today with past time), move it to next occurrence:
+            - If only time is in past for today, move to tomorrow
+            - If day is in past for current month, move to next month
+            - If full date (day and month) is in the past for current year, move to next year
+            - Example: if today is March 20, 2024, and event is "15 марта", use March 15, 2025
+            - Example: if today is March 20, 2024, and event is "15-го", use April 15, 2024
+        5. For specific date with day and month:
+            - If date is today or in the future for current year, use current year
+            - If date is in the past for current year, use next year
+            - Example: if today is March 15, 2024, and event is "15 марта", use March 15, 2024
+            - Example: if today is March 20, 2024, and event is "15 марта", use March 15, 2025
+            - IMPORTANT: When checking if date is in the past, compare the full date (day and month) with current date.
+              If the date has already passed this year, use next year.
 
         Required fields:
-        - title: event title
+        - title: event title. Format based on event type (keep it as short as possible):
+            * For haircuts/beauty: "Парикмахер"
+            * For doctor appointments: "//doctor_type//" (use genitive case, e.g. "Дерматолог")
+            * For online sessions: "Психолог"
+            * For masterclasses: "//short_title//" (without prefixes like "Онлайн мастер-класс:")
+            * ALWAYS use Russian text from the input (e.g. "Встреча с клиентом")
         - start_time: event start time (in ISO format)
-        - end_time: event end time (in ISO format). If not specified, set it to 1 hour after start_time
-        - description: event description
-        - location: event location (if any)
+        - end_time: event end time (in ISO format). If duration is specified, use it, otherwise set to 1 hour after start_time
+        - description: detailed description of the event. For masterclasses and courses, use the full title
+        - location: event location. Format based on event type:
+            * For physical locations: "//place_name//, //address//" (include name if available)
+            * For online events: "Онлайн"
+        - result: boolean, true if event was successfully parsed, false if there is not enough information
+        - comment: string, explanation why parsing failed if result is false, null if result is true
         
         Return ONLY the JSON object without any additional text or explanation. Use null for missing fields.
         Example response format:
-        {
-            "title": "Meeting with client",
+        {{
+            "title": "Встреча с клиентом",
             "start_time": "2024-03-22T15:00:00",
             "end_time": "2024-03-22T16:00:00",  # If not specified, set to start_time + 1 hour
-            "description": "Project discussion",
-            "location": "Office"
-        }"""
+            "description": "Встреча с клиентом",  # Same as title if no specific description
+            "location": "Офис",  # Use nominative case
+            "result": true,
+            "comment": null
+        }}
+        
+        Example of failed parsing (if there is not enough information, e.g. only month without day):
+        {{
+            "result": false,
+            "comment": "Недостаточно информации, уточните дату/время"
+        }}"""
         
         messages = [
             {"role": "system", "content": system_prompt},
@@ -84,6 +121,9 @@ class DeepSeekLLM:
             
         try:
             content = response["choices"][0]["message"]["content"]
+            # Remove markdown code block if present
+            if content.startswith("```"):
+                content = content.split("\n", 1)[1].rsplit("\n", 1)[0]
             return json.loads(content)
         except (KeyError, json.JSONDecodeError) as e:
             logger.error(f"Failed to parse DeepSeek response: {str(e)}")
