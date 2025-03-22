@@ -2,7 +2,7 @@ import json
 import httpx
 from loguru import logger
 from typing import Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from .config import get_settings
 
 class DeepSeekLLM:
@@ -15,6 +15,37 @@ class DeepSeekLLM:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
+
+    def _return_datetime(self) -> datetime:
+        return datetime.now()
+
+    def _generate_calendar(self) -> str:
+        from calendar import day_name
+        
+        calendar_text = []
+        current_date = self._return_datetime()
+        current_weekday = current_date.weekday()
+        
+        for i in range(14):
+            date = current_date + timedelta(days=i)
+            day_info = {
+                'Monday': ('понедельник', 'этот', 'следующий'),
+                'Tuesday': ('вторник', 'этот', 'следующий'),
+                'Wednesday': ('среда', 'эта', 'следующая'),
+                'Thursday': ('четверг', 'этот', 'следующий'),
+                'Friday': ('пятница', 'эта', 'следующая'),
+                'Saturday': ('суббота', 'эта', 'следующая'),
+                'Sunday': ('воскресенье', 'это', 'следующее')
+            }[day_name[date.weekday()]]
+            
+            if i == 0:
+                calendar_text.append(f"{date.strftime('%d %B')} — {day_info[0]} (сегодня)")
+            elif i <= 6 - current_weekday:  # если день на этой неделе
+                calendar_text.append(f"{date.strftime('%d %B')} — {day_info[1]} {day_info[0]}")
+            else:
+                calendar_text.append(f"{date.strftime('%d %B')} — {day_info[2]} {day_info[0]}")
+            
+        return "\n".join(calendar_text)
 
     async def _make_request(self, messages: list[Dict[str, str]], temperature: float = 0.7) -> Optional[Dict[str, Any]]:
         try:
@@ -50,6 +81,7 @@ class DeepSeekLLM:
 Current date and time: {current_datetime}
 
 WARNING! 200 points are deducted for each mistake. You have 600 points left. Be very attentive
+
 Input date parsing logic:
 1. If no date is specified, use current day
 2. If only day is specified (e.g. "15th" or "15-го"):
@@ -74,7 +106,20 @@ Input date parsing logic:
     - Example: if today is March 20, 2024, and event is "15 марта", use March 15, 2025
     - IMPORTANT: When checking if date is in the past, compare the full date (day and month) with current date.
         If the date has already passed this year, use next year
-
+6. For relative dates:
+    - "в эту субботу" means the next Saturday from today
+    - "на субботу" means the next Saturday from today
+    - "в следующую субботу" means the Saturday after the next one
+    - "в прошлую субботу" means the last Saturday
+    - Example: if today is Wednesday March 20, 2024:
+        * "в эту субботу" = March 23, 2024
+        * "на субботу" = March 23, 2024
+        * "в следующую субботу" = March 30, 2024
+    Calendar for the next 14 days:
+{self._generate_calendar()}
+7.  - If there is no time statement, only a date statement, and it is one day, then return the business hours: 10:00-18:00
+    - If the text specifies multiple days (March 20-26), then you should return 00:00:00 March 20-23:59:59 March 26, i.e. full days.
+        
 IMPORTANT TIMEZONE HANDLING:
 1. If timezone is specified (e.g. "по иркутскому времени", "по московскому времени", etc.):
    - Convert all times to Moscow time (UTC+3)
