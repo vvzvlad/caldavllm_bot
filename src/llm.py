@@ -45,6 +45,17 @@ class DeepSeekLLM:
 
     async def parse_calendar_event(self, text: str) -> Optional[Dict[str, Any]]:
         system_prompt = """You are a calendar event parser. Extract the following information from the text and return it in valid JSON format.
+        Current date and time: 2024-03-22 16:30:00
+
+        Date parsing logic:
+        1. If no date is specified, use current day
+        2. If only day is specified (e.g. "15th"):
+            - If day is in the past for current month, use next month
+            - Otherwise use current month
+        3. If month is specified (e.g. "September"):
+            - If month is in the past for current year, use next year
+            - Otherwise use current year
+
         Required fields:
         - title: event title
         - start_time: event start time (in ISO format)
