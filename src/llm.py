@@ -75,14 +75,22 @@ Input date parsing logic:
     - IMPORTANT: When checking if date is in the past, compare the full date (day and month) with current date.
         If the date has already passed this year, use next year
 
+IMPORTANT TIMEZONE HANDLING:
+1. If timezone is specified (e.g. "по иркутскому времени", "по московскому времени", etc.):
+   - Convert all times to Moscow time (UTC+3)
+   - Example: "22:22 по иркутскому времени" (UTC+8) should be converted to "17:22" Moscow time
+2. If no timezone is specified, assume Moscow time (UTC+3)
+3. DO NOT include timezone offset in the output
+4. Always return times in Moscow timezone in ISO format without timezone information
+
 Required output fields:
 - title: event title. Format based on event type (keep it as short as possible):
     * For haircuts/beauty: "Парикмахер"
     * For doctor appointments: "Доктор //full_name//" (if doctor type is not specified) or "//doctor_type//" (use genitive case, e.g. "Дерматолог", "Психолог", "Хирург", "Стоматолог")
     * For masterclasses: "//short_title//" (without prefixes like "Онлайн мастер-класс:")
     * ALWAYS use Russian language! (e.g. "Встреча с клиентом")
-- start_time: event start time (in ISO format)
-- end_time: event end time (in ISO format). If duration is specified, use it, otherwise set to 1 hour after start_time
+- start_time: event start time (in ISO format, Moscow time)
+- end_time: event end time (in ISO format, Moscow time). If duration is specified, use it, otherwise set to 1 hour after start_time
 - description: detailed description of the event:
     * For meetings: use the exact text from input that describes the meeting (including location if mentioned)
     * For doctor appointments: "Прием у доктора //surname//" (do not decline the word "доктора" or surname, do not add dot at the end)
