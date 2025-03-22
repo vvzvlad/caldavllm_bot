@@ -48,7 +48,7 @@ class DeepSeekLLM:
         Required fields:
         - title: event title
         - start_time: event start time (in ISO format)
-        - end_time: event end time (in ISO format)
+        - end_time: event end time (in ISO format). If not specified, set it to 1 hour after start_time
         - description: event description
         - location: event location (if any)
         
@@ -57,7 +57,7 @@ class DeepSeekLLM:
         {
             "title": "Meeting with client",
             "start_time": "2024-03-22T15:00:00",
-            "end_time": "2024-03-22T16:00:00",
+            "end_time": "2024-03-22T16:00:00",  # If not specified, set to start_time + 1 hour
             "description": "Project discussion",
             "location": "Office"
         }"""
