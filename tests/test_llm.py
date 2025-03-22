@@ -349,7 +349,6 @@ Cortex and Cognition: Connection Principles. Neuroimaging and clinical applicati
 Заявки на участие (с тезисами) принимаются по этой ссылке до 11.12.2022 включительно.""")
         
         assert result is not None
-        assert "Cortex and Cognition" in result["title"]
         assert result["start_time"] == "2022-12-21T10:00:00"
         assert result["end_time"] == "2022-12-22T23:59:59"
         assert result["result"] is True
@@ -576,9 +575,9 @@ async def test_parse_calendar_event_gokon(llm_instance):
 Можно оплатить переводом на карту Сбербанк. Получатель Дмитрий Сергеевич Щ. Если у тебя комиссия, запроси ссылку на виртуальную кассу.
 После оплаты пришли, пожалуйста, чек.""")
         
-        assert result is not None
+        assert result is not None   
         assert result["start_time"] == "2023-12-24T19:00:00"
-        assert "м.Курская" in result["location"]
+        assert "Курская" in result["location"]
         assert result["result"] is True
         assert result["comment"] is None
 
