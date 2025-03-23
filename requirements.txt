@@ -2,6 +2,5 @@ aiogram
 python-dotenv
 loguru
 caldav
-deepseek-ai
 pytz
 httpx
