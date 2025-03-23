@@ -45,6 +45,18 @@ class CalendarBot:
         return "\n".join(parts)
 
     def _setup_handlers(self):
+        @self.bot.message_handler(commands=['start'])
+        def handle_start(message):
+            welcome_text = (
+                "👋 Привет! Я бот для добавления событий в календарь.\n\n"
+                "Просто напиши мне о событии, например:\n"
+                "• Завтра в 15:00 встреча с клиентом\n"
+                "• 25 марта в 11 утра лекция о японском символизме\n"
+                "• Встреча в офисе в понедельник в 10:00\n\n"
+                "Я пойму текст и добавлю событие в твой календарь."
+            )
+            self.bot.reply_to(message, welcome_text)
+
         @self.bot.message_handler(func=lambda message: True)
         def handle_message(message):
             try:
@@ -69,8 +81,7 @@ class CalendarBot:
                 # Create inline keyboard
                 keyboard = telebot.types.InlineKeyboardMarkup()
                 keyboard.row(
-                    telebot.types.InlineKeyboardButton("✅ Добавить", callback_data="add"),
-                    telebot.types.InlineKeyboardButton("❌ Отменить", callback_data="cancel")
+                    telebot.types.InlineKeyboardButton("✅ Добавить в календарь", callback_data="add")
                 )
                 
                 # Send event preview with buttons
@@ -113,21 +124,13 @@ class CalendarBot:
                     
                     if success:
                         self.bot.answer_callback_query(call.id, "✅ Событие добавлено в календарь")
-                        self.bot.edit_message_reply_markup(
-                            chat_id=call.message.chat.id,
-                            message_id=call.message.message_id,
-                            reply_markup=None
+                        # Send success message
+                        self.bot.send_message(
+                            call.message.chat.id,
+                            f"✅ Событие успешно добавлено в календарь!"
                         )
                     else:
                         self.bot.answer_callback_query(call.id, "❌ Ошибка при добавлении события")
-                        
-                elif action == 'cancel':
-                    self.bot.answer_callback_query(call.id, "❌ Добавление отменено")
-                    self.bot.edit_message_reply_markup(
-                        chat_id=call.message.chat.id,
-                        message_id=call.message.message_id,
-                        reply_markup=None
-                    )
                     
             except Exception as e:
                 logger.error(f"Error handling callback: {str(e)}")
