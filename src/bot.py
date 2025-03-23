@@ -30,8 +30,7 @@ class CalendarBot:
 
     def _format_number(self, number: int) -> str:
         """Format number to human readable format with k suffix"""
-        if number >= 1000:
-            return f"{number // 1000}к"
+        if number >= 1000: return f"{number // 1000}к"
         return str(number)
 
     def _create_event_message(self, event: dict) -> str:
@@ -58,10 +57,7 @@ class CalendarBot:
     async def _process_message(self, message: types.Message):
         try:
             if not self.user_manager.has_caldav_credentials(message.from_user.id):
-                await message.reply(
-                    "Сначала нужно настроить подключение к календарю. "
-                    "Используйте команду /caldav"
-                )
+                await message.reply( "Сначала нужно настроить подключение к календарю. Используйте команду /caldav" )
                 return
 
             if not self.user_manager.check_token_limit(message.from_user.id):
@@ -74,7 +70,6 @@ class CalendarBot:
 
             logger.info(f"Received message from {message.from_user.id}: {message.text}")
 
-            # Создаем новый экземпляр DeepSeekLLM для каждого запроса
             llm = DeepSeekLLM()
             
             typing_task = asyncio.create_task(self._send_typing_status(message.chat.id))
@@ -197,10 +192,8 @@ class CalendarBot:
                 params = message.text.split()
                 if len(params) != 5:
                     await message.reply(
-                        "Неверный формат команды. Используйте:\n"
-                        "/caldav username password url calendar_name\n\n"
-                        "Например:\n"
-                        "/caldav user@fastmail.com strong_password https://caldav.fastmail.com/dav/ main_calendar"
+                        "Неверный формат команды. Используйте:\n /caldav username password url calendar_name\n\n"
+                        "Например:\n/caldav user@fastmail.com strong_password https://caldav.fastmail.com/dav/ main_calendar"
                     )
                     return
 
@@ -223,8 +216,7 @@ class CalendarBot:
 
                 if success:
                     await status_message.edit_text(
-                        "✅ Календарь доступен, настройки успешно сохранены!\n"
-                        "Теперь вы можете добавлять события."
+                        "✅ Календарь доступен, настройки успешно сохранены! Теперь вы можете добавлять события."
                     )
                 else:
                     await status_message.edit_text(
