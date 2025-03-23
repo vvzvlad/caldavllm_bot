@@ -38,21 +38,11 @@ class CalendarBot:
         """Create formatted event message"""
         parts = []
         
-        if event.get("title"):
-            parts.append(f"📌 {event['title']}")
-            
-        if event.get("start_time"):
-            parts.append(f"🕒 Начало: {self._format_datetime(event['start_time'])}")
-            
-        if event.get("end_time"):
-            parts.append(f"🕒 Конец: {self._format_datetime(event['end_time'])}")
-            
-        if event.get("location"):
-            parts.append(f"📍 {event['location']}")
-            
-        if event.get("description"):
-            parts.append(f"📝 {event['description']}")
-            
+        if event.get("title"): parts.append(f"📌 {event['title']}")
+        if event.get("start_time"): parts.append(f"🕒 Начало: {self._format_datetime(event['start_time'])}")
+        if event.get("end_time"): parts.append(f"🕒 Конец: {self._format_datetime(event['end_time'])}")
+        if event.get("location"): parts.append(f"📍 {event['location']}")
+        if event.get("description"): parts.append(f"📝 {event['description']}")
         return "\n".join(parts)
 
     async def _send_typing_status(self, chat_id: int):
@@ -98,9 +88,7 @@ class CalendarBot:
                     pass
 
             if not event:
-                await message.reply(
-                    "Внутренняя ошибка при обработке сообщения. Попробуйте позже."
-                )
+                await message.reply( "Внутренняя ошибка при обработке сообщения. Попробуйте позже." )
                 return
             
             tokens_used = event.get("tokens_used", 0) if isinstance(event, dict) else 0
@@ -109,9 +97,7 @@ class CalendarBot:
             
             if not event["result"]:
                 error_text = event.get("comment", "Неизвестная ошибка")
-                await message.reply(
-                    f"❌ {error_text}"
-                )
+                await message.reply(  f"❌ {error_text}" )
                 return
             
             keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
@@ -261,9 +247,19 @@ class CalendarBot:
             # Создаем таск для обработки колбэка
             asyncio.create_task(self._process_callback(callback_query))
 
+    async def _advertise_commands(self):
+        """Register bot commands in Telegram"""
+        commands = [
+            types.BotCommand(command="start", description="Начать работу с ботом"),
+            types.BotCommand(command="caldav", description="Настроить подключение к календарю"),
+            types.BotCommand(command="stats", description="Показать статистику использования")
+        ]
+        await self.bot.set_my_commands(commands)
+
     async def start(self):
         logger.info("Starting bot...")
         try:
+            await self._advertise_commands()
             await self.dp.start_polling(self.bot)
         finally:
             await self.bot.session.close()
