@@ -141,14 +141,10 @@ Input date parsing logic:
     - If full date (day and month) is in the past for current year, move to next year
     - Example: if today is March 20, 2024, and event is "15 марта", use March 15, 2025
     - Example: if today is March 20, 2024, and event is "15-го", use April 15, 2024
-5. For specific date with day and month:
-    - If date is today or in the future for current year, use current year
-    - If date is in the past for current year, use next year
-    - Example: if today is March 15, 2024, and event is "15 марта", use March 15, 2024
-    - Example: if today is March 20, 2024, and event is "15 марта", use March 15, 2025
     - IMPORTANT: When checking if date is in the past, compare the full date (day and month) with current date.
         If the date has already passed this year, use next year
-6. For relative dates:
+    - CRITICAL: For example, if today is March 20, 2024, and event is "15 марта в 15:00", you MUST use March 15, 2025 because March 15, 2024 is in the past!
+5. For relative dates:
     - "в эту субботу" means the next Saturday from today
     - "на субботу" means the next Saturday from today
     - "в следующую субботу" means the Saturday after the next one
@@ -159,7 +155,8 @@ Input date parsing logic:
         * "в следующую субботу" = March 30, 2024
 
 7.  - If there is no time statement, only a date statement, and it is one day, then return the business hours: 10:00-18:00
-    - If the text specifies multiple days (March 20-26), then you should return 00:00:00 March 20-23:59:59 March 26, i.e. full days.
+    - If the text specifies multiple days (March 20-26), then you MUST return 00:00:00 for start_time and 23:59:59 for end_time
+    - Example: "20–28 августа" should be "2024-08-20T00:00:00" to "2024-08-28T23:59:59"
         
 Current date and time: {current_datetime}
     Calendar for the next 14 days:
