@@ -1,107 +1,107 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from caldav import DAVClient
 from loguru import logger
 from .config import get_settings
+from .users import UserManager
 
 class CalendarManager:
     def __init__(self):
         self.settings = get_settings()
-        self.client = None
-        self.calendar = None
-        self._init_calendar()
+        self.user_manager = UserManager()
 
-    def _init_calendar(self):
+    def check_calendar_access(self, url, username, password, calendar_name):
+        """Check if we can connect to calendar with given credentials"""
         try:
-            # Get settings from environment variables
-            caldav_url = os.getenv("CALDAV_URL")
-            caldav_username = os.getenv("CALDAV_USERNAME")
-            caldav_password = os.getenv("CALDAV_PASSWORD")
-            caldav_calendar_name = os.getenv("CALDAV_CALENDAR_NAME")
-
-            if not all([caldav_url, caldav_username, caldav_password, caldav_calendar_name]):
-                logger.error("CalDAV credentials not set")
-                return
-
-            # Connect to server
-            self.client = DAVClient(
-                url=caldav_url,
-                username=caldav_username,
-                password=caldav_password
+            # Try to connect
+            client = DAVClient(
+                url=url,
+                username=username,
+                password=password
             )
-
-            # Get list of calendars
-            calendars = self.client.principal().calendars()
             
-            # Find the required calendar
-            for calendar in calendars:
-                if calendar.name == caldav_calendar_name:
-                    self.calendar = calendar
-                    logger.info(f"Successfully connected to calendar: {caldav_calendar_name}")
-                    return
+            # Try to get principal
+            principal = client.principal()
+            calendars = principal.calendars()
+            
+            # Try to find calendar
+            calendar = None
+            for cal in calendars:
+                if cal.name == calendar_name:
+                    calendar = cal
+                    break
+                    
+            if not calendar:
+                return False, f"Календарь '{calendar_name}' не найден. Доступные календари: {', '.join(cal.name for cal in calendars)}"
 
-            # If calendar not found, use the first available one
-            if calendars:
-                self.calendar = calendars[0]
-                logger.info(f"Using first available calendar: {self.calendar.name}")
-            else:
-                logger.error("No calendars found")
-                raise Exception("No calendars available")
+            return True, None
 
         except Exception as e:
-            logger.error(f"Failed to initialize calendar: {str(e)}")
-            raise
+            return False, f"Ошибка подключения к календарю: {str(e)}"
 
-    def add_event(self, title: str, start_time: str, end_time: str, description: str, location: str) -> bool:
-        """
-        Adds an event to the calendar
-        
-        Args:
-            title: event title
-            start_time: start time in ISO format (YYYY-MM-DDTHH:MM:SS)
-            end_time: end time in ISO format (YYYY-MM-DDTHH:MM:SS)
-            description: event description
-            location: event location
-            
-        Returns:
-            bool: True if event was successfully added, False otherwise
-        """
+    def add_event(self, user_id, title, start_time, end_time=None, description=None, location=None):
+        """Add event to user's calendar"""
         try:
-            if not self.calendar:
-                logger.error("Calendar not initialized")
-                return False
+            # Get user credentials
+            creds = self.user_manager.get_caldav_credentials(user_id)
+            if not creds:
+                error = f"Не найдены данные для подключения к календарю. Используйте команду /caldav для настройки"
+                logger.error(f"No CalDAV credentials found for user {user_id}")
+                return False, error
 
-            # Check required fields
-            if not title or not start_time or not end_time:
-                logger.error("Missing required fields: title, start_time, or end_time")
-                return False
+            # Create client and get calendar
+            client = DAVClient(
+                url=creds["url"],
+                username=creds["username"],
+                password=creds["password"]
+            )
+            
+            principal = client.principal()
+            calendars = principal.calendars()
+            
+            calendar = None
+            for cal in calendars:
+                if cal.name == creds["calendar_name"]:
+                    calendar = cal
+                    break
+                    
+            if not calendar:
+                error = f"Календарь '{creds['calendar_name']}' не найден. Проверьте название календаря в настройках"
+                logger.error(f"Calendar '{creds['calendar_name']}' not found for user {user_id}")
+                return False, error
 
             # Get timezone from settings
             timezone = self.settings["caldav"]["timezone"]
 
-            # Create iCal event
+            # If no end time provided, make event 1 hour long
+            if not end_time:
+                end_time = (datetime.fromisoformat(start_time) + timedelta(hours=1)).isoformat()
+
+            # Format times for iCal
+            start_time = start_time.replace('-', '').replace(':', '')
+            end_time = end_time.replace('-', '').replace(':', '')
+
+            # Create event data
             event_data = f"""BEGIN:VCALENDAR
 VERSION:2.0
 BEGIN:VEVENT
-DTSTART;TZID={timezone}:{start_time.replace('-', '').replace(':', '')}
-DTEND;TZID={timezone}:{end_time.replace('-', '').replace(':', '')}
-SUMMARY:{title}"""
+SUMMARY:{title}
+DTSTART;TZID={timezone}:{start_time}
+DTEND;TZID={timezone}:{end_time}"""
 
-            # Add optional fields only if they are not None
             if description:
                 event_data += f"\nDESCRIPTION:{description}"
             if location:
                 event_data += f"\nLOCATION:{location}"
 
-            event_data += """
-END:VEVENT
-END:VCALENDAR"""
+            event_data += "\nEND:VEVENT\nEND:VCALENDAR"
 
             # Add event to calendar
-            self.calendar.save_event(event_data)
-            logger.info(f"Successfully added event: {title}")
-            return True
+            calendar.save_event(event_data)
+            logger.info(f"Added event '{title}' to calendar for user {user_id}")
+            return True, None
 
         except Exception as e:
-            logger.error(f"Failed to add event: {str(e)}")
-            return False
+            error = f"Ошибка при добавлении события в календарь: {str(e)}"
+            logger.error(f"Error adding event for user {user_id}: {str(e)}")
+            return False, error

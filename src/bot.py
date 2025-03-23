@@ -5,6 +5,7 @@ from loguru import logger
 from .config import get_settings
 from .llm import DeepSeekLLM
 from .calendar import CalendarManager
+from .users import UserManager
 
 class CalendarBot:
     def __init__(self):
@@ -12,6 +13,7 @@ class CalendarBot:
         self.bot = telebot.TeleBot(self.settings["telegram_token"])
         self.llm = DeepSeekLLM()
         self.calendar = CalendarManager()
+        self.user_manager = UserManager()
         self.parsed_events = {}  # Store parsed events by message_id
         self._setup_handlers()
 
@@ -50,7 +52,12 @@ class CalendarBot:
         def handle_start(message):
             welcome_text = (
                 "👋 Привет! Я бот для добавления событий в календарь.\n\n"
-                "Просто напиши мне о событии, например:\n"
+                "Сначала нужно настроить подключение к твоему календарю. "
+                "Используй команду /caldav с параметрами:\n"
+                "/caldav username password url calendar_name\n\n"
+                "Например:\n"
+                "/caldav vvzvlad@fastmail.com password https://caldav.fastmail.com/dav/ TG\n\n"
+                "После этого просто напиши мне о событии, например:\n"
                 "• Завтра в 15:00 встреча с клиентом\n"
                 "• 25 марта в 11 утра лекция о японском символизме\n"
                 "• Встреча в офисе в понедельник в 10:00\n\n"
@@ -58,9 +65,73 @@ class CalendarBot:
             )
             self.bot.reply_to(message, welcome_text)
 
+        @self.bot.message_handler(commands=['caldav'])
+        def handle_caldav(message):
+            try:
+                # Check if user provided all required parameters
+                params = message.text.split()
+                if len(params) != 5:
+                    self.bot.reply_to(
+                        message,
+                        "Неверный формат команды. Используйте:\n"
+                        "/caldav username password url calendar_name\n\n"
+                        "Например:\n"
+                        "/caldav user@fastmail.com strong_password https://caldav.fastmail.com/dav/ main_calendar"
+                    )
+                    return
+
+                # Get parameters
+                _, username, password, url, calendar_name = params
+
+                # Show checking message
+                self.bot.send_message(message.chat.id, "🔄 Проверка подключения к календарю...")
+
+                # Check calendar access
+                success, error = self.calendar.check_calendar_access(url, username, password, calendar_name)
+                if not success:
+                    self.bot.send_message(message.chat.id, f"❌ {error}")
+                    return
+
+                # Save credentials
+                success = self.user_manager.save_caldav_credentials(
+                    message.from_user.id,
+                    username,
+                    password,
+                    url,
+                    calendar_name
+                )
+
+                if success:
+                    self.bot.reply_to(
+                        message,
+                        "✅ Календарь доступен, настройки успешно сохранены!\n"
+                        "Теперь вы можете добавлять события."
+                    )
+                else:
+                    self.bot.reply_to(
+                        message,
+                        "❌ Не удалось сохранить настройки календаря. Попробуйте еще раз."
+                    )
+
+            except Exception as e:
+                logger.error(f"Error setting up CalDAV: {str(e)}")
+                self.bot.reply_to(
+                    message,
+                    "Произошла ошибка при настройке календаря. Попробуйте еще раз."
+                )
+
         @self.bot.message_handler(func=lambda message: True)
         def handle_message(message):
             try:
+                # Check if user has CalDAV credentials
+                if not self.user_manager.has_caldav_credentials(message.from_user.id):
+                    self.bot.reply_to(
+                        message,
+                        "Сначала нужно настроить подключение к календарю. "
+                        "Используйте команду /caldav"
+                    )
+                    return
+
                 logger.info(f"Received message from {message.from_user.id}: {message.text}")
                 self.bot.send_chat_action(message.chat.id, 'typing')
                 event = asyncio.run(self.llm.parse_calendar_event(message.text))
@@ -112,7 +183,8 @@ class CalendarBot:
                         return
                     
                     # Add event to calendar
-                    success = self.calendar.add_event(
+                    success, error = self.calendar.add_event(
+                        user_id=call.from_user.id,
                         title=event["title"],
                         start_time=event["start_time"],
                         end_time=event["end_time"],
@@ -135,7 +207,8 @@ class CalendarBot:
                         # Clean up
                         del self.parsed_events[call.message.message_id]
                     else:
-                        self.bot.answer_callback_query(call.id, "❌ Ошибка при добавлении события")
+                        self.bot.answer_callback_query(call.id, "❌ Ошибка")
+                        self.bot.reply_to(call.message, f"❌ {error}")
                         
                 elif action == 'added':
                     self.bot.answer_callback_query(call.id, "Это событие уже добавлено в календарь")
