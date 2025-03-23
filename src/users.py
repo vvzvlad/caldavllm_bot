@@ -1,8 +1,9 @@
 import os
 import json
-from loguru import logger
 from datetime import datetime, date
 from typing import Dict, Tuple
+
+from loguru import logger
 from .config import get_settings
 
 class UserManager:
@@ -32,7 +33,7 @@ class UserManager:
             # Load existing data if file exists
             data = {}
             if os.path.exists(user_file):
-                with open(user_file, 'r') as f:
+                with open(user_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
             
             # Update caldav credentials
@@ -43,7 +44,7 @@ class UserManager:
                 "calendar_name": calendar_name
             }
             
-            with open(user_file, 'w') as f:
+            with open(user_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f)
             
             logger.info(f"Saved CalDAV credentials for user {user_id}")
@@ -60,7 +61,7 @@ class UserManager:
             if not os.path.exists(user_file):
                 return None
                 
-            with open(user_file, 'r') as f:
+            with open(user_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 return data.get("caldav")
                 
@@ -80,7 +81,7 @@ class UserManager:
             # Load existing data if file exists
             data = {}
             if os.path.exists(user_file):
-                with open(user_file, 'r') as f:
+                with open(user_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
             
             # Initialize stats if not exists
@@ -97,7 +98,7 @@ class UserManager:
                 data["stats"]["total_tokens"] += tokens_used
             data["stats"]["last_request"] = datetime.now().isoformat()
             
-            with open(user_file, 'w') as f:
+            with open(user_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f)
             
             logger.info(f"Updated stats for user {user_id}")
@@ -114,7 +115,7 @@ class UserManager:
             if not os.path.exists(user_file):
                 return None
                 
-            with open(user_file, 'r') as f:
+            with open(user_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 return data.get("stats")
                 

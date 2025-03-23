@@ -1,9 +1,9 @@
 import json
-import httpx
-import asyncio
-from loguru import logger
-from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
+from typing import Dict, Any, Optional
+
+import httpx
+from loguru import logger
 from .config import get_settings
 
 class DeepSeekLLM:
@@ -39,12 +39,9 @@ class DeepSeekLLM:
                 'Sunday': ('воскресенье', 'это', 'следующее')
             }[day_name[date.weekday()]]
             
-            if i == 0:
-                calendar_text.append(f"{date.strftime('%d %B')} — {day_info[0]} (сегодня)")
-            elif i <= 6 - current_weekday:  # если день на этой неделе
-                calendar_text.append(f"{date.strftime('%d %B')} — {day_info[1]} {day_info[0]}")
-            else:
-                calendar_text.append(f"{date.strftime('%d %B')} — {day_info[2]} {day_info[0]}")
+            if i == 0: calendar_text.append(f"{date.strftime('%d %B')} — {day_info[0]} (сегодня)")
+            elif i <= 6 - current_weekday: calendar_text.append(f"{date.strftime('%d %B')} — {day_info[1]} {day_info[0]}")
+            else: calendar_text.append(f"{date.strftime('%d %B')} — {day_info[2]} {day_info[0]}")
             
         return "\n".join(calendar_text)
 

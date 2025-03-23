@@ -1,6 +1,4 @@
-import os
 from datetime import datetime, timedelta
-import aiohttp
 from caldav import DAVClient
 from loguru import logger
 from .config import get_settings

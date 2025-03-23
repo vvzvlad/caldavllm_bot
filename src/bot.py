@@ -61,7 +61,6 @@ class CalendarBot:
                 return
 
             if not self.user_manager.check_token_limit(message.from_user.id):
-                remaining_tokens = self.user_manager.get_remaining_tokens(message.from_user.id)
                 await message.reply(
                     f"Достигнут дневной лимит токенов ({self.user_manager.daily_token_limit}). "
                     "Попробуйте завтра."

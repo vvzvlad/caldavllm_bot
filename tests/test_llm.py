@@ -3,12 +3,12 @@
 # pylance: disable=reportMissingImports, reportMissingModuleSource, reportGeneralTypeIssues
 # type: ignore
 
-import pytest
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest.mock import patch
-from src.llm import DeepSeekLLM
 import os
-from unittest.mock import MagicMock
+
+import pytest
+from src.llm import DeepSeekLLM
 
 def check_api_key():
     api_key = os.getenv("API_KEY")
