@@ -101,7 +101,7 @@ Required output fields:
     * For haircuts/beauty: "Парикмахер"
     * For doctor appointments: "Доктор //full_name//" (if doctor type is not specified) or "//doctor_type//" (use genitive case, e.g. "Дерматолог", "Психолог", "Хирург", "Стоматолог")
     * For masterclasses: "//short_title//" (without prefixes like "Онлайн мастер-класс:")
-    * ALWAYS use Russian language! (e.g. "Встреча с клиентом")
+    * ALWAYS use Russian language! 
 - start_time: event start time (in ISO format, Moscow time)
 - end_time: event end time (in ISO format, Moscow time). If duration is specified, use it, otherwise set to 1 hour after start_time
 - description: detailed description of the event:
@@ -159,11 +159,11 @@ Input date parsing logic:
 Return ONLY the JSON object without any additional text or explanation. Use null for missing fields.
 Example response format:
 {{
-    "title": "Встреча с клиентом",
+    "title": "//название события//",
     "start_time": "2024-03-22T15:00:00",
     "end_time": "2024-03-22T16:00:00",  # If not specified, set to start_time + 1 hour
-    "description": "Встреча с клиентом",  # Same as title if no specific description
-    "location": "Офис",  # Use nominative case
+    "description": "//описание события//",  # blank if no specific description
+    "location": "//место события//",  # Use nominative case
     "result": true,
     "comment": null
 }}
@@ -171,7 +171,7 @@ Example response format:
 Example of failed parsing (if there is not enough information, e.g. only month without day):
 {{
     "result": false,
-    "comment": "Недостаточно информации о дате"
+    "comment": "Недостаточно информации о дате" #Описание того, почему не удалось распознать событие
 }}
 
 
@@ -187,7 +187,6 @@ Current date and time: {current_datetime}
         ]
         
         try:
-            # Замеряем время API запроса
             api_start_time = datetime.now()
             response = await self._make_request(messages)
             api_end_time = datetime.now()
