@@ -3,3 +3,4 @@ pytest-asyncio
 httpx
 loguru
 pyTelegramBotAPI
+caldav
