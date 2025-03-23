@@ -83,48 +83,50 @@ class DeepSeekLLM:
         logger.info(f"[{request_id}] Starting LLM processing for: {text}")
         
         current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        system_prompt = f"""You are a calendar event parser. Extract the following information from the text and return it in valid JSON format.
-
+        system_prompt = f"""
+You are a calendar event parser. Extract the following information from the text and return it in valid JSON format.
 
 WARNING! 200 points are deducted for each mistake. You have 600 points left. Be very attentive
 
 IMPORTANT TIMEZONE HANDLING:
 1. If timezone is specified (e.g. "по иркутскому времени", "по московскому времени", etc.):
-   - Convert all times to Moscow time (UTC+3)
-   - Example: "22:22 по иркутскому времени" (UTC+8) should be converted to "17:22" Moscow time
+   * Convert all times to Moscow time (UTC+3)
+   * Example: "22:22 по иркутскому времени" (UTC+8) should be converted to "17:22" Moscow time
 2. If no timezone is specified, assume Moscow time (UTC+3)
 3. DO NOT include timezone offset in the output
 4. Always return times in Moscow timezone in ISO format without timezone information
 
 Required output fields:
 - title: event title. Format based on event type (keep it as short as possible):
-    * For haircuts/beauty: "Парикмахер"
-    * For doctor appointments: "Доктор //full_name//" (if doctor type is not specified) or "//doctor_type//" (use genitive case, e.g. "Дерматолог", "Психолог", "Хирург", "Стоматолог")
-    * For masterclasses: "//short_title//" (without prefixes like "Онлайн мастер-класс:")
+    * The headline is the most concise description of what the event is about. 
+    * It should be as short as possible, but not so short as to lose information. 
+    * Don't write generic words like “Встреча”, “Звонок”, always be specific about who exactly the meeting is with and who exactly the call is with. Often, you can do without common words at all: For example, not “Доктор”, but “Дерматолог”. Not “Встреча” but “Обсуждение работы”. Not “встреча с HR” but “собеседование”.  
+    * If I'm asking to be reminded of something, such as “напомни мне вывести деньги”, I should write “Вывести деньги”. 
+    * Use abbreviations: instead of “День рождения Иры”, write “ДР Иры”. 
+    * Write general words like “доктор” if and only if it is impossible to understand from the text what kind of doctor it is. And even in this case, it is better to write “Доктор Семенов С.”, so that you can distinguish this event from all the others that could also be called “доктор”. 
+    * Don't write long phrases: “Звонок с коллегами по поводу уточнения новых требований к ПО” will be cut off by any calendar and there will remain just “Звонок с колл....”, and it doesn't allow to understand what the meeting is about. Instead, it would be better to write “Звонок Требования ПО”
     * ALWAYS use Russian language! 
+    * ALWAYS keep title short and concise (under 100 characters)
 - start_time: event start time (in ISO format, Moscow time)
 - end_time: event end time (in ISO format, Moscow time). If duration is specified, use it, otherwise set to 1 hour after start_time
 - description: detailed description of the event:
-    * For meetings: use the exact text from input that describes the meeting (including location if mentioned)
-    * For doctor appointments: "Прием у доктора //surname//" (do not decline the word "доктора" or surname, do not add dot at the end)
-    * For online sessions: "Сессия с психологом //psychologist_name//" (use instrumental case for psychologist name)
-    * For masterclasses and courses: use the full title without prefixes
-    * For events with speakers/guests: "Встреча с //guest_name//, //guest_role//. //short_topic//" (keep it under 100 characters)
+    * Any additional information that is not duplicated in the title. If you receive an appointment with a doctor (“Запись к врачу-дерматологу в 14 часов, адрес большая шихстинская, с собой надо взять медкарту, не есть 12 часов, оплата 5000р”), you should put the most important thing in the title: Дерматолог, time and address - in the time and date fields, and all other information - in the description field: “Взять медкарту, не есть 12 часов, оплата 5000₽”. 
+    * A good description should fit in 300 characters or less. 
     * ALWAYS use Russian language! 
-    * ALWAYS keep descriptions short and concise (under 100 characters)
+    * ALWAYS keep descriptions short and concise (under 300 characters)
 - location: event location. Format based on event type:
-    * For physical locations: "//address//" (do not include clinic name at the start unless it's part of the official address)
-    * For online events: //link// or, if link is not available, "Онлайн" (if it's an online event)
+    * For physical locations: "//name//, //address//" (include point name!)
+    * For online events: //link// or, if link is not available, none.
     * ALWAYS use Russian language! 
 - result: boolean, true if event was successfully parsed, false if parsed failed, there is not enough information
 - comment: string, explanation why parsing failed if result is false, null if result is true
- 
+
 Input date parsing logic:
 1. If no date is specified, use current day
 2. If only day is specified (e.g. "15th" or "15-го"):
     - If day is in the past for current month, use next month
     - If day is today or in the future for current month, use current month
-    - Example: if today is March 15, 2024, and event is "15-го", use March 15, 2024
+    - Example: if today is March 14, 2024, and event is "15-го", use March 15, 2024
     - Example: if today is March 20, 2024, and event is "15-го", use April 15, 2024
 3. If month is specified (e.g. "September"):
     - Month without specific day is NOT enough information, return result: false
@@ -156,6 +158,11 @@ Input date parsing logic:
 7.  - If there is no time statement, only a date statement, and it is one day, then return the business hours: 10:00-18:00
     - If the text specifies multiple days (March 20-26), then you should return 00:00:00 March 20-23:59:59 March 26, i.e. full days.
         
+Current date and time: {current_datetime}
+    Calendar for the next 14 days:
+{await self._generate_calendar()}
+
+
 Return ONLY the JSON object without any additional text or explanation. Use null for missing fields.
 Example response format:
 {{
@@ -174,10 +181,6 @@ Example of failed parsing (if there is not enough information, e.g. only month w
     "comment": "Недостаточно информации о дате" #Описание того, почему не удалось распознать событие
 }}
 
-
-Current date and time: {current_datetime}
-    Calendar for the next 14 days:
-{await self._generate_calendar()}
 
 """
         
