@@ -66,7 +66,7 @@ class DeepSeekLLM:
                     return None
                 
                 response_json = response.json()
-                logger.debug(f"DeepSeek API response: {response_json}")
+                logger.debug(f"DeepSeek API response: {response_json['choices'][0]['message']['content']}")
                 return response_json
 
         except httpx.TimeoutException:
@@ -103,21 +103,24 @@ Required output fields:
     * Don't write generic words like “Встреча”, “Звонок”, always be specific about who exactly the meeting is with and who exactly the call is with. Often, you can do without common words at all: For example, not “Доктор”, but “Дерматолог”. Not “Встреча” but “Обсуждение работы”. Not “встреча с HR” but “собеседование”.  
     * If I'm asking to be reminded of something, such as “напомни мне вывести деньги”, I should write “Вывести деньги”. 
     * Use abbreviations: instead of “День рождения Иры”, write “ДР Иры”. 
-    * Write general words like “доктор” if and only if it is impossible to understand from the text what kind of doctor it is. And even in this case, it is better to write “Доктор Семенов С.”, so that you can distinguish this event from all the others that could also be called “доктор”. 
     * Don't write long phrases: “Звонок с коллегами по поводу уточнения новых требований к ПО” will be cut off by any calendar and there will remain just “Звонок с колл....”, and it doesn't allow to understand what the meeting is about. Instead, it would be better to write “Звонок Требования ПО”
+    *DON'T FANTASIZE. you are obliged to write ONLY WHAT IS in the text given to you. Any fantasy will get you points when it is discovered.
+    * Start with capital letters
     * ALWAYS use Russian language! 
     * ALWAYS keep title short and concise (under 100 characters)
 - start_time: event start time (in ISO format, Moscow time)
 - end_time: event end time (in ISO format, Moscow time). If duration is specified, use it, otherwise set to 1 hour after start_time
 - description: detailed description of the event:
-    * Any additional information that is not duplicated in the title. If you receive an appointment with a doctor (“Запись к врачу-дерматологу в 14 часов, адрес большая шихстинская, с собой надо взять медкарту, не есть 12 часов, оплата 5000р”), you should put the most important thing in the title: Дерматолог, time and address - in the time and date fields, and all other information - in the description field: “Взять медкарту, не есть 12 часов, оплата 5000₽”. 
-    * A good description should fit in 300 characters or less. 
+    * Any additional information that is not duplicated in the title. If you receive an appointment with a doctor (“Запись к врачу-дерматологу в 14 часов, адрес большая шихстинская, с собой надо взять медкарту, не есть 12 часов, оплата 5000р”), you should put the most important thing in the title: "Дерматолог", time and address - in the time and date fields, and all other information - in the description field: “Взять медкарту, не есть 12 часов, оплата 5000₽”. 
+    * A good description should fit in 300 characters or less.
+    *DON'T FANTASIZE. you are obliged to write ONLY WHAT IS in the text given to you. Any fantasy will get you points when it is discovered.
+    * Start with capital letters 
     * ALWAYS use Russian language! 
     * ALWAYS keep descriptions short and concise (under 300 characters)
 - location: event location. Format based on event type:
     * For physical locations: "//name//, //address//" (include point name!)
-    * For online events: //link// or, if link is not available, none.
-    * ALWAYS use Russian language! 
+    * For online events: //link// or, if link is not available, blank.
+    * Start with capital letters
 - result: boolean, true if event was successfully parsed, false if parsed failed, there is not enough information
 - comment: string, explanation why parsing failed if result is false, null if result is true
 
