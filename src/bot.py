@@ -12,6 +12,7 @@ class CalendarBot:
         self.bot = telebot.TeleBot(self.settings["telegram_token"])
         self.llm = DeepSeekLLM()
         self.calendar = CalendarManager()
+        self.parsed_events = {}  # Store parsed events by message_id
         self._setup_handlers()
 
     def _format_datetime(self, iso_datetime: str) -> str:
@@ -85,11 +86,14 @@ class CalendarBot:
                 )
                 
                 # Send event preview with buttons
-                self.bot.reply_to(
+                preview_message = self.bot.reply_to(
                     message,
                     f"Проверьте информацию о событии:\n\n{self._create_event_message(event)}",
                     reply_markup=keyboard
                 )
+                
+                # Store parsed event in memory
+                self.parsed_events[preview_message.message_id] = event
                 
             except Exception as e:
                 logger.error(f"Error processing message: {str(e)}")
@@ -101,16 +105,10 @@ class CalendarBot:
                 action = call.data
                 
                 if action == 'add':
-                    # Get original message text from the message that was replied to
-                    original_message = call.message.reply_to_message
-                    if not original_message:
-                        self.bot.answer_callback_query(call.id, "Ошибка: не удалось найти исходное сообщение")
-                        return
-                        
-                    event = asyncio.run(self.llm.parse_calendar_event(original_message.text))
-                    
-                    if not event or not event["result"]:
-                        self.bot.answer_callback_query(call.id, "Ошибка при добавлении события")
+                    # Get parsed event from memory
+                    event = self.parsed_events.get(call.message.message_id)
+                    if not event:
+                        self.bot.answer_callback_query(call.id, "Ошибка: не удалось найти информацию о событии")
                         return
                     
                     # Add event to calendar
@@ -124,13 +122,23 @@ class CalendarBot:
                     
                     if success:
                         self.bot.answer_callback_query(call.id, "✅ Событие добавлено в календарь")
-                        # Send success message
-                        self.bot.send_message(
-                            call.message.chat.id,
-                            f"✅ Событие успешно добавлено в календарь!"
+                        # Update button text
+                        keyboard = telebot.types.InlineKeyboardMarkup()
+                        keyboard.row(
+                            telebot.types.InlineKeyboardButton("✅ Успешно добавлено", callback_data="added")
                         )
+                        self.bot.edit_message_reply_markup(
+                            chat_id=call.message.chat.id,
+                            message_id=call.message.message_id,
+                            reply_markup=keyboard
+                        )
+                        # Clean up
+                        del self.parsed_events[call.message.message_id]
                     else:
                         self.bot.answer_callback_query(call.id, "❌ Ошибка при добавлении события")
+                        
+                elif action == 'added':
+                    self.bot.answer_callback_query(call.id, "Это событие уже добавлено в календарь")
                     
             except Exception as e:
                 logger.error(f"Error handling callback: {str(e)}")
