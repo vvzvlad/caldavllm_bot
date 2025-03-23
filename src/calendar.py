@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, timedelta
+import aiohttp
 from caldav import DAVClient
 from loguru import logger
 from .config import get_settings
@@ -10,7 +11,7 @@ class CalendarManager:
         self.settings = get_settings()
         self.user_manager = UserManager()
 
-    def check_calendar_access(self, url, username, password, calendar_name):
+    async def check_calendar_access(self, url, username, password, calendar_name):
         """Check if we can connect to calendar with given credentials"""
         try:
             # Try to connect
@@ -39,7 +40,7 @@ class CalendarManager:
         except Exception as e:
             return False, f"Ошибка подключения к календарю: {str(e)}"
 
-    def add_event(self, user_id, title, start_time, end_time=None, description=None, location=None):
+    async def add_event(self, user_id, title, start_time, end_time=None, description=None, location=None):
         """Add event to user's calendar"""
         try:
             # Get user credentials

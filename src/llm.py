@@ -1,5 +1,6 @@
 import json
 import httpx
+import asyncio
 from loguru import logger
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
@@ -19,7 +20,7 @@ class DeepSeekLLM:
     def _return_datetime(self) -> datetime:
         return datetime.now()
 
-    def _generate_calendar(self) -> str:
+    async def _generate_calendar(self) -> str:
         from calendar import day_name
         
         calendar_text = []
@@ -49,7 +50,7 @@ class DeepSeekLLM:
 
     async def _make_request(self, messages: list[Dict[str, str]], temperature: float = 0.7) -> Optional[Dict[str, Any]]:
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
                     self.base_url,
                     headers=self.headers,
@@ -57,8 +58,7 @@ class DeepSeekLLM:
                         "model": self.model,
                         "messages": messages,
                         "temperature": temperature
-                    },
-                    timeout=30.0
+                    }
                 )
                 
                 if response.status_code != 200:
@@ -68,6 +68,7 @@ class DeepSeekLLM:
                 response_json = response.json()
                 logger.debug(f"DeepSeek API response: {response_json}")
                 return response_json
+
         except httpx.TimeoutException:
             logger.error("DeepSeek API request timed out")
             return None
@@ -76,6 +77,11 @@ class DeepSeekLLM:
             return None
 
     async def parse_calendar_event(self, text: str) -> Optional[Dict[str, Any]]:
+        # Метка времени начала обработки
+        start_time = datetime.now()
+        request_id = str(hash(text))[:8]  # Короткий ID для отслеживания запроса
+        logger.info(f"[{request_id}] Starting LLM processing for: {text}")
+        
         current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = f"""You are a calendar event parser. Extract the following information from the text and return it in valid JSON format.
 
@@ -171,7 +177,7 @@ Example of failed parsing (if there is not enough information, e.g. only month w
 
 Current date and time: {current_datetime}
     Calendar for the next 14 days:
-{self._generate_calendar()}
+{await self._generate_calendar()}
 
 """
         
@@ -180,11 +186,22 @@ Current date and time: {current_datetime}
             {"role": "user", "content": text}
         ]
         
-        response = await self._make_request(messages)
-        if not response:
-            return None
-            
         try:
+            # Замеряем время API запроса
+            api_start_time = datetime.now()
+            response = await self._make_request(messages)
+            api_end_time = datetime.now()
+            api_duration = (api_end_time - api_start_time).total_seconds()
+            
+            logger.info(f"[{request_id}] API request completed in {api_duration:.2f} seconds")
+            
+            if not response:
+                logger.error(f"[{request_id}] API request failed")
+                return {
+                    "result": False,
+                    "comment": "Ошибка при обращении к LLM: таймаут запроса или сервис недоступен"
+                }
+                
             content = response["choices"][0]["message"]["content"]
             # Remove markdown code block if present
             if content.startswith("```"):
@@ -195,7 +212,15 @@ Current date and time: {current_datetime}
             if "usage" in response:
                 result["tokens_used"] = response["usage"].get("total_tokens", 0)
             
+            # Общее время обработки
+            end_time = datetime.now()
+            total_duration = (end_time - start_time).total_seconds()
+            logger.info(f"[{request_id}] Total processing completed in {total_duration:.2f} seconds")
+            
             return result
         except (KeyError, json.JSONDecodeError) as e:
-            logger.error(f"Failed to parse DeepSeek response: {str(e)}")
-            return None
+            logger.error(f"[{request_id}] Failed to parse DeepSeek response: {str(e)}")
+            return {
+                "result": False,
+                "comment": f"Ошибка при обработке ответа LLM: {str(e)}"
+            }

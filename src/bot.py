@@ -1,8 +1,8 @@
 import asyncio
-import telebot
 from datetime import datetime
 from loguru import logger
-from threading import Thread
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
 from .config import get_settings
 from .llm import DeepSeekLLM
 from .calendar import CalendarManager
@@ -11,11 +11,12 @@ from .users import UserManager
 class CalendarBot:
     def __init__(self):
         self.settings = get_settings()
-        self.bot = telebot.TeleBot(self.settings["telegram_token"])
+        self.bot = Bot(token=self.settings["telegram_token"])
+        self.dp = Dispatcher()
         self.llm = DeepSeekLLM()
         self.calendar = CalendarManager()
         self.user_manager = UserManager()
-        self.parsed_events = {}  # Store parsed events by message_id
+        self.parsed_events = {}
         self._setup_handlers()
 
     def _format_datetime(self, iso_datetime: str) -> str:
@@ -54,23 +55,120 @@ class CalendarBot:
             
         return "\n".join(parts)
 
-    def _send_typing_status(self, chat_id: int, stop_event):
-        """Send typing status every 4 seconds until stop_event is set"""
-        while not stop_event.is_set():
+    async def _send_typing_status(self, chat_id: int):
+        """Send typing status every 4 seconds until cancelled"""
+        while True:
             try:
-                self.bot.send_chat_action(chat_id, 'typing')
-                # Sleep for 4 seconds (typing status lasts 5 seconds)
-                for _ in range(40):  # 4 seconds with 0.1s checks
-                    if stop_event.is_set():
-                        break
-                    asyncio.run(asyncio.sleep(0.1))
+                await self.bot.send_chat_action(chat_id=chat_id, action="typing")
+                await asyncio.sleep(4)  # Telegram typing status lasts 5 seconds
             except Exception as e:
                 logger.error(f"Error sending typing status: {str(e)}")
                 break
 
+    async def _process_message(self, message: types.Message):
+        try:
+            if not self.user_manager.has_caldav_credentials(message.from_user.id):
+                await message.reply(
+                    "Сначала нужно настроить подключение к календарю. "
+                    "Используйте команду /caldav"
+                )
+                return
+
+            if not self.user_manager.check_token_limit(message.from_user.id):
+                remaining_tokens = self.user_manager.get_remaining_tokens(message.from_user.id)
+                await message.reply(
+                    f"Достигнут дневной лимит токенов ({self.user_manager.daily_token_limit}). "
+                    "Попробуйте завтра."
+                )
+                return
+
+            logger.info(f"Received message from {message.from_user.id}: {message.text}")
+
+            # Создаем новый экземпляр DeepSeekLLM для каждого запроса
+            llm = DeepSeekLLM()
+            
+            typing_task = asyncio.create_task(self._send_typing_status(message.chat.id))
+            try:
+                event = await llm.parse_calendar_event(message.text)
+            finally:
+                typing_task.cancel()
+                try:
+                    await typing_task
+                except asyncio.CancelledError:
+                    pass
+
+            if not event:
+                await message.reply(
+                    "Внутренняя ошибка при обработке сообщения. Попробуйте позже."
+                )
+                return
+            
+            tokens_used = event.get("tokens_used", 0) if isinstance(event, dict) else 0
+            self.user_manager.update_user_stats(message.from_user.id, tokens_used)
+            self.user_manager.add_tokens_used(message.from_user.id, tokens_used)
+            
+            if not event["result"]:
+                error_text = event.get("comment", "Неизвестная ошибка")
+                await message.reply(
+                    f"❌ {error_text}"
+                )
+                return
+            
+            keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="✅ Добавить в календарь", callback_data="add")]
+            ])
+            
+            preview_message = await message.reply(
+                f"Проверьте информацию о событии:\n\n{self._create_event_message(event)}",
+                reply_markup=keyboard
+            )
+            
+            self.parsed_events[preview_message.message_id] = event
+            
+        except Exception as e:
+            logger.error(f"Error processing message: {str(e)}")
+            await message.reply("Произошла ошибка при обработке сообщения. Попробуйте еще раз.")
+
+    async def _process_callback(self, callback_query: types.CallbackQuery):
+        try:
+            action = callback_query.data
+            
+            if action == 'add':
+                event = self.parsed_events.get(callback_query.message.message_id)
+                if not event:
+                    await callback_query.answer("Ошибка: не удалось найти информацию о событии")
+                    return
+                
+                success, error = await self.calendar.add_event(
+                    user_id=callback_query.from_user.id,
+                    title=event["title"],
+                    start_time=event["start_time"],
+                    end_time=event["end_time"],
+                    description=event["description"],
+                    location=event["location"]
+                )
+                
+                if success:
+                    await callback_query.answer("✅ Событие добавлено в календарь")
+                    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text="✅ Успешно добавлено", callback_data="added")]
+                    ])
+                    await callback_query.message.edit_reply_markup(reply_markup=keyboard)
+                    del self.parsed_events[callback_query.message.message_id]
+                else:
+                    await callback_query.answer("❌ Ошибка")
+                    await callback_query.message.reply(f"❌ {error}")
+                    
+            elif action == 'added':
+                await callback_query.answer("Это событие уже добавлено в календарь")
+                
+        except Exception as e:
+            logger.error(f"Error handling callback: {str(e)}")
+            await callback_query.answer("Произошла ошибка")
+
     def _setup_handlers(self):
-        @self.bot.message_handler(commands=['start'])
-        def handle_start(message):
+        @self.dp.message(Command("start"))
+        async def handle_start(message: types.Message):
             welcome_text = (
                 "👋 Привет! Я бот для добавления событий в календарь.\n\n"
                 "Сначала нужно настроить подключение к твоему календарю. "
@@ -84,13 +182,13 @@ class CalendarBot:
                 "• Встреча в офисе в понедельник в 10:00\n\n"
                 "Я пойму текст и добавлю событие в твой календарь."
             )
-            self.bot.reply_to(message, welcome_text)
+            await message.reply(welcome_text)
 
-        @self.bot.message_handler(commands=['stats'])
-        def handle_stats(message):
+        @self.dp.message(Command("stats"))
+        async def handle_stats(message: types.Message):
             stats = self.user_manager.get_user_stats(message.from_user.id)
             if not stats:
-                self.bot.reply_to(message, "У вас пока нет статистики использования.")
+                await message.reply("У вас пока нет статистики использования.")
                 return
                 
             last_request = datetime.fromisoformat(stats["last_request"]) if stats["last_request"] else None
@@ -105,16 +203,14 @@ class CalendarBot:
                 f"Осталось токенов сегодня: {self._format_number(remaining_tokens)}\n"
                 f"Последний запрос: {last_request_str}"
             )
-            self.bot.reply_to(message, stats_text)
+            await message.reply(stats_text)
 
-        @self.bot.message_handler(commands=['caldav'])
-        def handle_caldav(message):
+        @self.dp.message(Command("caldav"))
+        async def handle_caldav(message: types.Message):
             try:
-                # Check if user provided all required parameters
                 params = message.text.split()
                 if len(params) != 5:
-                    self.bot.reply_to(
-                        message,
+                    await message.reply(
                         "Неверный формат команды. Используйте:\n"
                         "/caldav username password url calendar_name\n\n"
                         "Например:\n"
@@ -122,19 +218,15 @@ class CalendarBot:
                     )
                     return
 
-                # Get parameters
                 _, username, password, url, calendar_name = params
 
-                # Show checking message
-                self.bot.send_message(message.chat.id, "🔄 Проверка подключения к календарю...")
+                status_message = await message.reply("🔄 Проверка подключения к календарю...")
 
-                # Check calendar access
-                success, error = self.calendar.check_calendar_access(url, username, password, calendar_name)
+                success, error = await self.calendar.check_calendar_access(url, username, password, calendar_name)
                 if not success:
-                    self.bot.send_message(message.chat.id, f"❌ {error}")
+                    await status_message.edit_text(f"❌ {error}")
                     return
 
-                # Save credentials
                 success = self.user_manager.save_caldav_credentials(
                     message.from_user.id,
                     username,
@@ -144,149 +236,34 @@ class CalendarBot:
                 )
 
                 if success:
-                    self.bot.reply_to(
-                        message,
+                    await status_message.edit_text(
                         "✅ Календарь доступен, настройки успешно сохранены!\n"
                         "Теперь вы можете добавлять события."
                     )
                 else:
-                    self.bot.reply_to(
-                        message,
+                    await status_message.edit_text(
                         "❌ Не удалось сохранить настройки календаря. Попробуйте еще раз."
                     )
 
             except Exception as e:
                 logger.error(f"Error setting up CalDAV: {str(e)}")
-                self.bot.reply_to(
-                    message,
+                await message.reply(
                     "Произошла ошибка при настройке календаря. Попробуйте еще раз."
                 )
 
-        @self.bot.message_handler(func=lambda message: True)
-        def handle_message(message):
-            try:
-                # Check if user has CalDAV credentials
-                if not self.user_manager.has_caldav_credentials(message.from_user.id):
-                    self.bot.reply_to(
-                        message,
-                        "Сначала нужно настроить подключение к календарю. "
-                        "Используйте команду /caldav"
-                    )
-                    return
+        @self.dp.message()
+        async def handle_message(message: types.Message):
+            # Создаем таск для обработки сообщения
+            asyncio.create_task(self._process_message(message))
 
-                # Check token limit
-                if not self.user_manager.check_token_limit(message.from_user.id):
-                    remaining_tokens = self.user_manager.get_remaining_tokens(message.from_user.id)
-                    self.bot.reply_to(
-                        message,
-                        f"Достигнут дневной лимит токенов ({self.user_manager.daily_token_limit}). "
-                        "Попробуйте завтра."
-                    )
-                    return
+        @self.dp.callback_query()
+        async def handle_callback(callback_query: types.CallbackQuery):
+            # Создаем таск для обработки колбэка
+            asyncio.create_task(self._process_callback(callback_query))
 
-                logger.info(f"Received message from {message.from_user.id}: {message.text}")
-                
-                # Start typing status in a separate thread
-                stop_typing = asyncio.Event()
-                typing_thread = Thread(
-                    target=self._send_typing_status,
-                    args=(message.chat.id, stop_typing)
-                )
-                typing_thread.start()
-
-                try:
-                    event = asyncio.run(self.llm.parse_calendar_event(message.text))
-                finally:
-                    # Stop typing status
-                    stop_typing.set()
-                    typing_thread.join()
-                
-                if not event:
-                    self.bot.reply_to(
-                        message,
-                        "Не удалось обработать сообщение. Попробуйте еще раз."
-                    )
-                    return
-                
-                # Update user stats with tokens from LLM response
-                tokens_used = event.get("tokens_used", 0) if isinstance(event, dict) else 0
-                self.user_manager.update_user_stats(message.from_user.id, tokens_used)
-                self.user_manager.add_tokens_used(message.from_user.id, tokens_used)
-                
-                if not event["result"]:
-                    self.bot.reply_to(
-                        message,
-                        f"Не удалось распарсить событие: {event['comment']}"
-                    )
-                    return
-                
-                # Create inline keyboard
-                keyboard = telebot.types.InlineKeyboardMarkup()
-                keyboard.row(
-                    telebot.types.InlineKeyboardButton("✅ Добавить в календарь", callback_data="add")
-                )
-                
-                # Send event preview with buttons
-                preview_message = self.bot.reply_to(
-                    message,
-                    f"Проверьте информацию о событии:\n\n{self._create_event_message(event)}",
-                    reply_markup=keyboard
-                )
-                
-                # Store parsed event in memory
-                self.parsed_events[preview_message.message_id] = event
-                
-            except Exception as e:
-                logger.error(f"Error processing message: {str(e)}")
-                self.bot.reply_to(message, "Произошла ошибка при обработке сообщения. Попробуйте еще раз.")
-
-        @self.bot.callback_query_handler(func=lambda call: True)
-        def handle_callback(call):
-            try:
-                action = call.data
-                
-                if action == 'add':
-                    # Get parsed event from memory
-                    event = self.parsed_events.get(call.message.message_id)
-                    if not event:
-                        self.bot.answer_callback_query(call.id, "Ошибка: не удалось найти информацию о событии")
-                        return
-                    
-                    # Add event to calendar
-                    success, error = self.calendar.add_event(
-                        user_id=call.from_user.id,
-                        title=event["title"],
-                        start_time=event["start_time"],
-                        end_time=event["end_time"],
-                        description=event["description"],
-                        location=event["location"]
-                    )
-                    
-                    if success:
-                        self.bot.answer_callback_query(call.id, "✅ Событие добавлено в календарь")
-                        # Update button text
-                        keyboard = telebot.types.InlineKeyboardMarkup()
-                        keyboard.row(
-                            telebot.types.InlineKeyboardButton("✅ Успешно добавлено", callback_data="added")
-                        )
-                        self.bot.edit_message_reply_markup(
-                            chat_id=call.message.chat.id,
-                            message_id=call.message.message_id,
-                            reply_markup=keyboard
-                        )
-                        # Clean up
-                        del self.parsed_events[call.message.message_id]
-                    else:
-                        self.bot.answer_callback_query(call.id, "❌ Ошибка")
-                        self.bot.reply_to(call.message, f"❌ {error}")
-                        
-                elif action == 'added':
-                    self.bot.answer_callback_query(call.id, "Это событие уже добавлено в календарь")
-                    
-            except Exception as e:
-                logger.error(f"Error handling callback: {str(e)}")
-                self.bot.answer_callback_query(call.id, "Произошла ошибка")
-
-    def run(self):
+    async def start(self):
         logger.info("Starting bot...")
-        self.bot.infinity_polling()
+        try:
+            await self.dp.start_polling(self.bot)
+        finally:
+            await self.bot.session.close()

@@ -1,6 +1,7 @@
-pytest
-pytest-asyncio
-httpx
+aiogram
+python-dotenv
 loguru
-pyTelegramBotAPI
 caldav
+deepseek-ai
+pytz
+httpx

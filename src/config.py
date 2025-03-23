@@ -1,7 +1,10 @@
 import os
 from loguru import logger
+from dotenv import load_dotenv
 
 def get_settings():
+    load_dotenv()
+
     api_key = os.getenv("API_KEY")
     if not api_key:
         logger.error("API_KEY must be set")
