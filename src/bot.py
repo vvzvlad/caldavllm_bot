@@ -2,6 +2,7 @@ import asyncio
 import telebot
 from datetime import datetime
 from loguru import logger
+from threading import Thread
 from .config import get_settings
 from .llm import DeepSeekLLM
 from .calendar import CalendarManager
@@ -26,6 +27,12 @@ class CalendarBot:
             logger.error(f"Failed to format datetime: {str(e)}")
             return iso_datetime
 
+    def _format_number(self, number: int) -> str:
+        """Format number to human readable format with k suffix"""
+        if number >= 1000:
+            return f"{number // 1000}к"
+        return str(number)
+
     def _create_event_message(self, event: dict) -> str:
         """Create formatted event message"""
         parts = []
@@ -47,6 +54,20 @@ class CalendarBot:
             
         return "\n".join(parts)
 
+    def _send_typing_status(self, chat_id: int, stop_event):
+        """Send typing status every 4 seconds until stop_event is set"""
+        while not stop_event.is_set():
+            try:
+                self.bot.send_chat_action(chat_id, 'typing')
+                # Sleep for 4 seconds (typing status lasts 5 seconds)
+                for _ in range(40):  # 4 seconds with 0.1s checks
+                    if stop_event.is_set():
+                        break
+                    asyncio.run(asyncio.sleep(0.1))
+            except Exception as e:
+                logger.error(f"Error sending typing status: {str(e)}")
+                break
+
     def _setup_handlers(self):
         @self.bot.message_handler(commands=['start'])
         def handle_start(message):
@@ -56,7 +77,7 @@ class CalendarBot:
                 "Используй команду /caldav с параметрами:\n"
                 "/caldav username password url calendar_name\n\n"
                 "Например:\n"
-                "/caldav vvzvlad@fastmail.com password https://caldav.fastmail.com/dav/ TG\n\n"
+                "/caldav username@fastmail.com password https://caldav.fastmail.com/dav/ calendar_name\n\n"
                 "После этого просто напиши мне о событии, например:\n"
                 "• Завтра в 15:00 встреча с клиентом\n"
                 "• 25 марта в 11 утра лекция о японском символизме\n"
@@ -64,6 +85,27 @@ class CalendarBot:
                 "Я пойму текст и добавлю событие в твой календарь."
             )
             self.bot.reply_to(message, welcome_text)
+
+        @self.bot.message_handler(commands=['stats'])
+        def handle_stats(message):
+            stats = self.user_manager.get_user_stats(message.from_user.id)
+            if not stats:
+                self.bot.reply_to(message, "У вас пока нет статистики использования.")
+                return
+                
+            last_request = datetime.fromisoformat(stats["last_request"]) if stats["last_request"] else None
+            last_request_str = last_request.strftime("%d.%m.%Y %H:%M:%S") if last_request else "никогда"
+            
+            remaining_tokens = self.user_manager.get_remaining_tokens(message.from_user.id)
+            
+            stats_text = (
+                "📊 Ваша статистика:\n\n"
+                f"Количество запросов: {stats['requests_count']}\n"
+                f"Всего использовано токенов: {self._format_number(stats['total_tokens'])}\n"
+                f"Осталось токенов сегодня: {self._format_number(remaining_tokens)}\n"
+                f"Последний запрос: {last_request_str}"
+            )
+            self.bot.reply_to(message, stats_text)
 
         @self.bot.message_handler(commands=['caldav'])
         def handle_caldav(message):
@@ -132,9 +174,32 @@ class CalendarBot:
                     )
                     return
 
+                # Check token limit
+                if not self.user_manager.check_token_limit(message.from_user.id):
+                    remaining_tokens = self.user_manager.get_remaining_tokens(message.from_user.id)
+                    self.bot.reply_to(
+                        message,
+                        f"Достигнут дневной лимит токенов ({self.user_manager.daily_token_limit}). "
+                        "Попробуйте завтра."
+                    )
+                    return
+
                 logger.info(f"Received message from {message.from_user.id}: {message.text}")
-                self.bot.send_chat_action(message.chat.id, 'typing')
-                event = asyncio.run(self.llm.parse_calendar_event(message.text))
+                
+                # Start typing status in a separate thread
+                stop_typing = asyncio.Event()
+                typing_thread = Thread(
+                    target=self._send_typing_status,
+                    args=(message.chat.id, stop_typing)
+                )
+                typing_thread.start()
+
+                try:
+                    event = asyncio.run(self.llm.parse_calendar_event(message.text))
+                finally:
+                    # Stop typing status
+                    stop_typing.set()
+                    typing_thread.join()
                 
                 if not event:
                     self.bot.reply_to(
@@ -142,6 +207,11 @@ class CalendarBot:
                         "Не удалось обработать сообщение. Попробуйте еще раз."
                     )
                     return
+                
+                # Update user stats with tokens from LLM response
+                tokens_used = event.get("tokens_used", 0) if isinstance(event, dict) else 0
+                self.user_manager.update_user_stats(message.from_user.id, tokens_used)
+                self.user_manager.add_tokens_used(message.from_user.id, tokens_used)
                 
                 if not event["result"]:
                     self.bot.reply_to(

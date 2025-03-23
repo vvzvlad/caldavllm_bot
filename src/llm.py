@@ -78,10 +78,41 @@ class DeepSeekLLM:
     async def parse_calendar_event(self, text: str) -> Optional[Dict[str, Any]]:
         current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = f"""You are a calendar event parser. Extract the following information from the text and return it in valid JSON format.
-Current date and time: {current_datetime}
+
 
 WARNING! 200 points are deducted for each mistake. You have 600 points left. Be very attentive
 
+IMPORTANT TIMEZONE HANDLING:
+1. If timezone is specified (e.g. "по иркутскому времени", "по московскому времени", etc.):
+   - Convert all times to Moscow time (UTC+3)
+   - Example: "22:22 по иркутскому времени" (UTC+8) should be converted to "17:22" Moscow time
+2. If no timezone is specified, assume Moscow time (UTC+3)
+3. DO NOT include timezone offset in the output
+4. Always return times in Moscow timezone in ISO format without timezone information
+
+Required output fields:
+- title: event title. Format based on event type (keep it as short as possible):
+    * For haircuts/beauty: "Парикмахер"
+    * For doctor appointments: "Доктор //full_name//" (if doctor type is not specified) or "//doctor_type//" (use genitive case, e.g. "Дерматолог", "Психолог", "Хирург", "Стоматолог")
+    * For masterclasses: "//short_title//" (without prefixes like "Онлайн мастер-класс:")
+    * ALWAYS use Russian language! (e.g. "Встреча с клиентом")
+- start_time: event start time (in ISO format, Moscow time)
+- end_time: event end time (in ISO format, Moscow time). If duration is specified, use it, otherwise set to 1 hour after start_time
+- description: detailed description of the event:
+    * For meetings: use the exact text from input that describes the meeting (including location if mentioned)
+    * For doctor appointments: "Прием у доктора //surname//" (do not decline the word "доктора" or surname, do not add dot at the end)
+    * For online sessions: "Сессия с психологом //psychologist_name//" (use instrumental case for psychologist name)
+    * For masterclasses and courses: use the full title without prefixes
+    * For events with speakers/guests: "Встреча с //guest_name//, //guest_role//. //short_topic//" (keep it under 100 characters)
+    * ALWAYS use Russian language! 
+    * ALWAYS keep descriptions short and concise (under 100 characters)
+- location: event location. Format based on event type:
+    * For physical locations: "//address//" (do not include clinic name at the start unless it's part of the official address)
+    * For online events: //link// or, if link is not available, "Онлайн" (if it's an online event)
+    * ALWAYS use Russian language! 
+- result: boolean, true if event was successfully parsed, false if parsed failed, there is not enough information
+- comment: string, explanation why parsing failed if result is false, null if result is true
+ 
 Input date parsing logic:
 1. If no date is specified, use current day
 2. If only day is specified (e.g. "15th" or "15-го"):
@@ -115,42 +146,10 @@ Input date parsing logic:
         * "в эту субботу" = March 23, 2024
         * "на субботу" = March 23, 2024
         * "в следующую субботу" = March 30, 2024
-    Calendar for the next 14 days:
-{self._generate_calendar()}
+
 7.  - If there is no time statement, only a date statement, and it is one day, then return the business hours: 10:00-18:00
     - If the text specifies multiple days (March 20-26), then you should return 00:00:00 March 20-23:59:59 March 26, i.e. full days.
         
-IMPORTANT TIMEZONE HANDLING:
-1. If timezone is specified (e.g. "по иркутскому времени", "по московскому времени", etc.):
-   - Convert all times to Moscow time (UTC+3)
-   - Example: "22:22 по иркутскому времени" (UTC+8) should be converted to "17:22" Moscow time
-2. If no timezone is specified, assume Moscow time (UTC+3)
-3. DO NOT include timezone offset in the output
-4. Always return times in Moscow timezone in ISO format without timezone information
-
-Required output fields:
-- title: event title. Format based on event type (keep it as short as possible):
-    * For haircuts/beauty: "Парикмахер"
-    * For doctor appointments: "Доктор //full_name//" (if doctor type is not specified) or "//doctor_type//" (use genitive case, e.g. "Дерматолог", "Психолог", "Хирург", "Стоматолог")
-    * For masterclasses: "//short_title//" (without prefixes like "Онлайн мастер-класс:")
-    * ALWAYS use Russian language! (e.g. "Встреча с клиентом")
-- start_time: event start time (in ISO format, Moscow time)
-- end_time: event end time (in ISO format, Moscow time). If duration is specified, use it, otherwise set to 1 hour after start_time
-- description: detailed description of the event:
-    * For meetings: use the exact text from input that describes the meeting (including location if mentioned)
-    * For doctor appointments: "Прием у доктора //surname//" (do not decline the word "доктора" or surname, do not add dot at the end)
-    * For online sessions: "Сессия с психологом //psychologist_name//" (use instrumental case for psychologist name)
-    * For masterclasses and courses: use the full title without prefixes
-    * For events with speakers/guests: "Встреча с //guest_name//, //guest_role//. //short_topic//" (keep it under 100 characters)
-    * ALWAYS use Russian language! 
-    * ALWAYS keep descriptions short and concise (under 100 characters)
-- location: event location. Format based on event type:
-    * For physical locations: "//address//" (do not include clinic name at the start unless it's part of the official address)
-    * For online events: //link// or, if link is not available, "Онлайн" (if it's an online event)
-    * ALWAYS use Russian language! 
-- result: boolean, true if event was successfully parsed, false if parsed failed, there is not enough information
-- comment: string, explanation why parsing failed if result is false, null if result is true
-
 Return ONLY the JSON object without any additional text or explanation. Use null for missing fields.
 Example response format:
 {{
@@ -167,7 +166,14 @@ Example of failed parsing (if there is not enough information, e.g. only month w
 {{
     "result": false,
     "comment": "Недостаточно информации о дате"
-}}"""
+}}
+
+
+Current date and time: {current_datetime}
+    Calendar for the next 14 days:
+{self._generate_calendar()}
+
+"""
         
         messages = [
             {"role": "system", "content": system_prompt},
@@ -183,7 +189,13 @@ Example of failed parsing (if there is not enough information, e.g. only month w
             # Remove markdown code block if present
             if content.startswith("```"):
                 content = content.split("\n", 1)[1].rsplit("\n", 1)[0]
-            return json.loads(content)
+            result = json.loads(content)
+            
+            # Add token usage information
+            if "usage" in response:
+                result["tokens_used"] = response["usage"].get("total_tokens", 0)
+            
+            return result
         except (KeyError, json.JSONDecodeError) as e:
             logger.error(f"Failed to parse DeepSeek response: {str(e)}")
             return None
