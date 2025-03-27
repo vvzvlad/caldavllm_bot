@@ -57,7 +57,7 @@ class CalendarBot:
     async def _process_message(self, message: types.Message):
         try:
             if not self.user_manager.has_caldav_credentials(message.from_user.id):
-                await message.reply( "Сначала нужно настроить подключение к календарю. Используйте команду /caldav" )
+                await message.reply( "Сначала нужно настроить подключение к календарю. Используй команду /caldav, /google или /fastmail" )
                 return
 
             if not self.user_manager.check_token_limit(message.from_user.id):
@@ -151,18 +151,14 @@ class CalendarBot:
         async def handle_start(message: types.Message):
             welcome_text = (
                 "👋 Привет! Я бот для добавления событий в календарь.\n\n"
-                "Сначала нужно настроить подключение к твоему календарю. "
-                "Используй команду /caldav с параметрами:\n"
+                "Для настройки календаря используй одну из команд:\n\n"
+                "📧 Для Google Calendar:\n"
+                "/google account password [calendar] - Быстрая настройка Google Calendar\n\n"
+                "📧 Для FastMail:\n"
+                "/fastmail account password [calendar] - Быстрая настройка FastMail\n\n"
+                "🔧 Для других CalDAV календарей:\n"
                 "/caldav username password url calendar_name\n\n"
-                "Для Google Calendar:\n"
-                "1. Создай пароль приложения на https://myaccount.google.com/apppasswords\n"
-                "2. Используй команду:\n"
-                "/caldav username@gmail.com apppassword https://www.google.com/calendar/dav/username@gmail.com/events username\n\n"
-                "Для FastMail:\n"
-                "1. Создай пароль приложения на https://app.fastmail.com/settings/security/apps\n"
-                "2. Используй команду:\n"
-                "/caldav username@fastmail.com apppassword https://caldav.fastmail.com/dav/ calendar_name\n\n"
-                "После этого просто напиши мне о событии, например:\n"
+                "После настройки просто напиши мне о событии, например:\n"
                 "• Завтра в 15:00 встреча с клиентом\n"
                 "• 25 марта в 11 утра лекция о японском символизме\n"
                 "• Встреча в офисе в понедельник в 10:00\n\n"
@@ -170,26 +166,111 @@ class CalendarBot:
             )
             await message.reply(welcome_text)
 
-        @self.dp.message(Command("stats"))
-        async def handle_stats(message: types.Message):
-            stats = self.user_manager.get_user_stats(message.from_user.id)
-            if not stats:
-                await message.reply("У вас пока нет статистики использования.")
-                return
-                
-            last_request = datetime.fromisoformat(stats["last_request"]) if stats["last_request"] else None
-            last_request_str = last_request.strftime("%d.%m.%Y %H:%M:%S") if last_request else "никогда"
-            
-            remaining_tokens = self.user_manager.get_remaining_tokens(message.from_user.id)
-            
-            stats_text = (
-                "📊 Ваша статистика:\n\n"
-                f"Количество запросов: {stats['requests_count']}\n"
-                f"Всего использовано токенов: {self._format_number(stats['total_tokens'])}\n"
-                f"Осталось токенов сегодня: {self._format_number(remaining_tokens)}\n"
-                f"Последний запрос: {last_request_str}"
-            )
-            await message.reply(stats_text)
+        @self.dp.message(Command("google"))
+        async def handle_google(message: types.Message):
+            try:
+                params = message.text.split()
+                if len(params) < 3 or len(params) > 4:
+                    await message.reply(
+                        "Неверный формат команды. Используйте:\n"
+                        "/google username password [calendar]\n\n"
+                        "❗️ username - ваш имя пользоватея (можно с @gmail.com, можно без)\n"
+                        "❗️ password — ваш пароль приложения. Для получения пароля:\n"
+                        "1. Включить двухфакторную аутентификацию (2FA)\n"
+                        "   • Без 2FA пароли приложений недоступны\n"
+                        "   • Обычный пароль от аккаунта не подойдет\n\n"
+                        "2. Создать пароль приложения:\n"
+                        "   • Перейдите на https://myaccount.google.com/apppasswords или перейдите Security->2-Step Verification->App passwords\n"
+                        "   • Введите название (например 'Calendar Bot')\n"
+                        "   • Используйте сгенерированный пароль в команде выше\n\n"
+                        "❗️ calendar - название вашего календаря (опционально)\n"
+                        "   • Если не указано, будет использован основной календарь"
+                    )
+                    return
+
+                _, username, password, *calendar_params = params
+                if not username.endswith("@gmail.com"):
+                    username = f"{username}@gmail.com"
+
+                url = f"https://www.google.com/calendar/dav/{username}/events"
+                calendar_name = calendar_params[0] if calendar_params else username
+
+                status_message = await message.reply("🔄 Проверка подключения к Google Calendar...")
+
+                success, error = await self.calendar.check_calendar_access(url, username, password, calendar_name)
+                if not success:
+                    await status_message.edit_text(f"❌ {error}")
+                    return
+
+                success = self.user_manager.save_caldav_credentials(
+                    message.from_user.id,
+                    username,
+                    password,
+                    url,
+                    calendar_name
+                )
+
+                if success:
+                    await status_message.edit_text("✅ Google Calendar подключен успешно! Можете добавлять события.")
+                else:
+                    await status_message.edit_text("❌ Не удалось сохранить настройки. Попробуйте еще раз.")
+
+            except Exception as e:
+                logger.error(f"Error setting up Google Calendar: {str(e)}")
+                await message.reply("Произошла ошибка при настройке. Попробуйте еще раз.")
+
+        @self.dp.message(Command("fastmail"))
+        async def handle_fastmail(message: types.Message):
+            try:
+                params = message.text.split()
+                if len(params) < 3 or len(params) > 4:
+                    await message.reply(
+                        "Неверный формат команды. Используйте:\n"
+                        "/fastmail username password [calendar]\n\n"
+                        "❗️ username - ваш имя пользоватея (можно с @fastmail.com, можно без)\n"
+                        "❗️ Для получения пароля:\n"
+                        "1. Перейдите на https://app.fastmail.com/settings/security/apps\n"
+                        "2. Нажмите 'New App Password'\n"
+                        "3. Выберите 'Calendars (CalDAV)'(так доступ у бота будет только к календарю, а не ко всей почте) и выберите название, например 'Calendar Bot'\n"
+                        "4. Используйте сгенерированный пароль в команде выше\n\n"
+                        "❗️ calendar - название вашего календаря (опционально)\n"
+                        "   • Если не указано, будет использован основной календарь"
+                    )
+                    return
+
+                _, username, password, *calendar_params = params
+                if not username.endswith("@fastmail.com"):
+                    username = f"{username}@fastmail.com"
+
+                # Get username without domain for default calendar name
+                default_calendar = username.split('@')[0]
+                calendar_name = calendar_params[0] if calendar_params else default_calendar
+
+                url = "https://caldav.fastmail.com/dav/"
+
+                status_message = await message.reply("🔄 Проверка подключения к FastMail...")
+
+                success, error = await self.calendar.check_calendar_access(url, username, password, calendar_name)
+                if not success:
+                    await status_message.edit_text(f"❌ {error}")
+                    return
+
+                success = self.user_manager.save_caldav_credentials(
+                    message.from_user.id,
+                    username,
+                    password,
+                    url,
+                    calendar_name
+                )
+
+                if success:
+                    await status_message.edit_text("✅ FastMail подключен успешно! Можете добавлять события.")
+                else:
+                    await status_message.edit_text("❌ Не удалось сохранить настройки. Попробуйте еще раз.")
+
+            except Exception as e:
+                logger.error(f"Error setting up FastMail: {str(e)}")
+                await message.reply("Произошла ошибка при настройке. Попробуйте еще раз.")
 
         @self.dp.message(Command("caldav"))
         async def handle_caldav(message: types.Message):
@@ -234,6 +315,27 @@ class CalendarBot:
                     "Произошла ошибка при настройке календаря. Попробуйте еще раз."
                 )
 
+        @self.dp.message(Command("stats"))
+        async def handle_stats(message: types.Message):
+            stats = self.user_manager.get_user_stats(message.from_user.id)
+            if not stats:
+                await message.reply("У вас пока нет статистики использования.")
+                return
+                
+            last_request = datetime.fromisoformat(stats["last_request"]) if stats["last_request"] else None
+            last_request_str = last_request.strftime("%d.%m.%Y %H:%M:%S") if last_request else "никогда"
+            
+            remaining_tokens = self.user_manager.get_remaining_tokens(message.from_user.id)
+            
+            stats_text = (
+                "📊 Ваша статистика:\n\n"
+                f"Количество запросов: {stats['requests_count']}\n"
+                f"Всего использовано токенов: {self._format_number(stats['total_tokens'])}\n"
+                f"Осталось токенов сегодня: {self._format_number(remaining_tokens)}\n"
+                f"Последний запрос: {last_request_str}"
+            )
+            await message.reply(stats_text)
+
         @self.dp.message()
         async def handle_message(message: types.Message):
             # Создаем таск для обработки сообщения
@@ -248,7 +350,9 @@ class CalendarBot:
         """Register bot commands in Telegram"""
         commands = [
             types.BotCommand(command="start", description="Начать работу с ботом"),
-            types.BotCommand(command="caldav", description="Настроить подключение к календарю"),
+            types.BotCommand(command="google", description="Настройка Google Calendar"),
+            types.BotCommand(command="fastmail", description="Настройка FastMail"),
+            types.BotCommand(command="caldav", description="Настройка CalDAV"),
             types.BotCommand(command="stats", description="Показать статистику использования")
         ]
         await self.bot.set_my_commands(commands)
