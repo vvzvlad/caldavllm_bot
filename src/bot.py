@@ -333,7 +333,7 @@ class CalendarBot:
                 "📊 Ваша статистика:\n\n"
                 f"Потрачено токенов сегодня: {self._format_number(self.user_manager.daily_token_limit - remaining_tokens)} из лимита {self._format_number(self.user_manager.daily_token_limit)}\n"
                 f"Вы сделали {stats['requests_count']} запросов, всего использовали токенов: {self._format_number(stats['total_tokens'])}, "
-                f"в среднем {self._format_number(stats['total_tokens'] // max(1, stats['requests_count']))} токенов на запрос\n"
+                f"в среднем {stats['total_tokens'] // max(1, stats['requests_count'])} токенов на запрос"
             )
             await message.reply(stats_text)
 
