@@ -326,16 +326,14 @@ class CalendarBot:
                 await message.reply("У вас пока нет статистики использования.")
                 return
                 
-            last_request = datetime.fromisoformat(stats["last_request"]) if stats["last_request"] else None
-            last_request_str = last_request.strftime("%d.%m.%Y %H:%M:%S") if last_request else "никогда"
             
             remaining_tokens = self.user_manager.get_remaining_tokens(message.from_user.id)
             
             stats_text = (
                 "📊 Ваша статистика:\n\n"
-                f"Количество запросов: {stats['requests_count']}\n"
-                f"Всего использовано токено за все время: {self._format_number(stats['total_tokens'])}\n"
-                f"Осталось токенов на сегодня: {self._format_number(remaining_tokens)}\n"
+                f"Потрачено токенов сегодня: {self._format_number(self.user_manager.daily_token_limit - remaining_tokens)} из лимита {self._format_number(self.user_manager.daily_token_limit)}\n"
+                f"Вы сделали {stats['requests_count']} запросов, всего использовали токенов: {self._format_number(stats['total_tokens'])}, "
+                f"в среднем {self._format_number(stats['total_tokens'] // max(1, stats['requests_count']))} токенов на запрос\n"
             )
             await message.reply(stats_text)
 
