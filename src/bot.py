@@ -334,9 +334,8 @@ class CalendarBot:
             stats_text = (
                 "📊 Ваша статистика:\n\n"
                 f"Количество запросов: {stats['requests_count']}\n"
-                f"Всего использовано токенов: {self._format_number(stats['total_tokens'])}\n"
-                f"Осталось токенов сегодня: {self._format_number(remaining_tokens)}\n"
-                f"Последний запрос: {last_request_str}"
+                f"Всего использовано токено за все время: {self._format_number(stats['total_tokens'])}\n"
+                f"Осталось токенов на сегодня: {self._format_number(remaining_tokens)}\n"
             )
             await message.reply(stats_text)
 
