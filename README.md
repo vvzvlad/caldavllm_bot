@@ -32,7 +32,7 @@ Note: If your calendar is not hosted on Google or Fastmail, you'll need to look 
 
 The bot supports several ways to connect your calendar:
 
-📧 **Google Calendar**:
+#### Google Calendar:
 ```
 /google username password [calendar]
 ```
@@ -51,7 +51,7 @@ The bot supports several ways to connect your calendar:
 ❗️ **calendar** - your calendar name (optional)
    • If not specified, the primary calendar will be used
 
-📧 **FastMail**:
+#### FastMail:
 ```
 /fastmail username password [calendar]
 ```
@@ -66,7 +66,7 @@ The bot supports several ways to connect your calendar:
 ❗️ **calendar** - your calendar name (optional)
    • If not specified, the primary calendar will be used
 
-🔧 **Other CalDAV calendars**:
+#### Other CalDAV calendars:
 ```
 /caldav username password url calendar_name
 ```
