@@ -184,7 +184,8 @@ class CalendarBot:
                         "   • Введите название (например 'Calendar Bot')\n"
                         "   • Используйте сгенерированный пароль в команде выше\n\n"
                         "❗️ calendar - название вашего календаря (опционально)\n"
-                        "   • Если не указано, будет использован основной календарь"
+                        "   • Если не указано, будет использован основной календарь",
+                        disable_web_page_preview=True
                     )
                     return
 
@@ -228,13 +229,14 @@ class CalendarBot:
                         "Неверный формат команды. Используйте:\n"
                         "/fastmail username password [calendar]\n\n"
                         "❗️ username - ваш имя пользоватея (можно с @fastmail.com, можно без)\n"
-                        "❗️ Для получения пароля:\n"
+                        "❗️ password — ваш пароль приложения. Для получения пароля:\n"
                         "1. Перейдите на https://app.fastmail.com/settings/security/apps\n"
                         "2. Нажмите 'New App Password'\n"
                         "3. Выберите 'Calendars (CalDAV)'(так доступ у бота будет только к календарю, а не ко всей почте) и выберите название, например 'Calendar Bot'\n"
                         "4. Используйте сгенерированный пароль в команде выше\n\n"
                         "❗️ calendar - название вашего календаря (опционально)\n"
-                        "   • Если не указано, будет использован основной календарь"
+                        "   • Если не указано, будет использован основной календарь",
+                        disable_web_page_preview=True
                     )
                     return
 
@@ -279,7 +281,8 @@ class CalendarBot:
                 if len(params) != 5:
                     await message.reply(
                         "Неверный формат команды. Используйте:\n /caldav username password url calendar_name\n\n"
-                        "Например:\n/caldav user@fastmail.com strong_password https://caldav.fastmail.com/dav/ main_calendar"
+                        "Например:\n/caldav user@fastmail.com strong_password https://caldav.fastmail.com/dav/ main_calendar",
+                        disable_web_page_preview=True
                     )
                     return
 
@@ -312,7 +315,8 @@ class CalendarBot:
             except Exception as e:
                 logger.error(f"Error setting up CalDAV: {str(e)}")
                 await message.reply(
-                    "Произошла ошибка при настройке календаря. Попробуйте еще раз."
+                    "Произошла ошибка при настройке календаря. Попробуйте еще раз.",
+                    disable_web_page_preview=True
                 )
 
         @self.dp.message(Command("stats"))
