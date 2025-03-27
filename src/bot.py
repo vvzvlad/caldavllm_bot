@@ -350,7 +350,7 @@ class CalendarBot:
     async def _advertise_commands(self):
         """Register bot commands in Telegram"""
         commands = [
-            types.BotCommand(command="start", description="Начать работу с ботом"),
+            types.BotCommand(command="start", description="Начать работу"),
             types.BotCommand(command="google", description="Настройка Google Calendar"),
             types.BotCommand(command="fastmail", description="Настройка FastMail"),
             types.BotCommand(command="caldav", description="Настройка CalDAV"),
