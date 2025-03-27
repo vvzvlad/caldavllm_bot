@@ -172,7 +172,6 @@ class CalendarBot:
                 params = message.text.split()
                 if len(params) < 3 or len(params) > 4:
                     await message.reply(
-                        "Неверный формат команды. Используйте:\n"
                         "/google username password [calendar]\n\n"
                         "❗️ username - ваш имя пользоватея (можно с @gmail.com, можно без)\n"
                         "❗️ password — ваш пароль приложения. Для получения пароля:\n"
@@ -226,7 +225,6 @@ class CalendarBot:
                 params = message.text.split()
                 if len(params) < 3 or len(params) > 4:
                     await message.reply(
-                        "Неверный формат команды. Используйте:\n"
                         "/fastmail username password [calendar]\n\n"
                         "❗️ username - ваш имя пользоватея (можно с @fastmail.com, можно без)\n"
                         "❗️ password — ваш пароль приложения. Для получения пароля:\n"
