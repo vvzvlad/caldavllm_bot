@@ -13,18 +13,22 @@ import json
 import base64
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, Union, List
+from typing import Dict, Any, Optional, List, cast
+import importlib
+import logging
 
-import httpx
-from loguru import logger
 from .config import get_settings
 
-class DeepSeekLLM:
+logger = logging.getLogger(__name__)
+httpx = importlib.import_module('httpx')
+
+
+class GroqLLM:
     def __init__(self):
         self.settings = get_settings()
         self.api_key = self.settings["api_key"]
         self.model = self.settings["model"]
-        self.base_url = "https://api.deepseek.com/v1/chat/completions"
+        self.base_url = "https://api.groq.com/openai/v1/chat/completions"
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -35,11 +39,11 @@ class DeepSeekLLM:
 
     async def _generate_calendar(self) -> str:
         from calendar import day_name
-        
+
         calendar_text = []
         current_date = self._return_datetime()
         current_weekday = current_date.weekday()
-        
+
         for i in range(14):
             date = current_date + timedelta(days=i)
             day_info = {
@@ -51,25 +55,27 @@ class DeepSeekLLM:
                 'Saturday': ('суббота', 'эта', 'следующая'),
                 'Sunday': ('воскресенье', 'это', 'следующее')
             }[day_name[date.weekday()]]
-            
-            if i == 0: calendar_text.append(f"{date.strftime('%d %B')} — {day_info[0]} (сегодня)")
-            elif i <= 6 - current_weekday: calendar_text.append(f"{date.strftime('%d %B')} — {day_info[1]} {day_info[0]}")
-            else: calendar_text.append(f"{date.strftime('%d %B')} — {day_info[2]} {day_info[0]}")
-            
+
+            if i == 0:
+                calendar_text.append(f"{date.strftime('%d %B')} — {day_info[0]} (сегодня)")
+            elif i <= 6 - current_weekday:
+                calendar_text.append(f"{date.strftime('%d %B')} — {day_info[1]} {day_info[0]}")
+            else:
+                calendar_text.append(f"{date.strftime('%d %B')} — {day_info[2]} {day_info[0]}")
+
         return "\n".join(calendar_text)
 
     def _encode_image_to_base64(self, image_path: str) -> str:
-        """Encode image to base64 string."""
         try:
             path = Path(image_path)
             if not path.exists():
-                logger.error(f"Image file not found: {image_path}")
+                logger.error("Image file not found in _encode_image_to_base64: %s", image_path)
                 return ""
-                
+
             with open(path, "rb") as image_file:
                 encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
-                mime_type = "image/jpeg"  # Default mime type
-                
+                mime_type = "image/jpeg"
+
                 if path.suffix.lower() in [".png"]:
                     mime_type = "image/png"
                 elif path.suffix.lower() in [".jpg", ".jpeg"]:
@@ -78,10 +84,10 @@ class DeepSeekLLM:
                     mime_type = "image/gif"
                 elif path.suffix.lower() in [".webp"]:
                     mime_type = "image/webp"
-                    
+
                 return f"data:{mime_type};base64,{encoded_string}"
-        except Exception as e:
-            logger.error(f"Failed to encode image: {str(e)}")
+        except OSError as e:
+            logger.error("Failed to encode image in _encode_image_to_base64: %s", e)
             return ""
 
     async def _make_request(self, messages: List[Dict[str, Any]], temperature: float = 0.7) -> Optional[Dict[str, Any]]:
@@ -96,85 +102,86 @@ class DeepSeekLLM:
                         "temperature": temperature
                     }
                 )
-                
+
                 if response.status_code != 200:
-                    logger.error(f"DeepSeek API error: {response.status_code} - {response.text}")
+                    logger.error("Groq API error %s in _make_request: %s", response.status_code, response.text)
                     return None
-                
+
                 response_json = response.json()
-                logger.debug(f"DeepSeek API response: {response_json['choices'][0]['message']['content']}")
+                try:
+                    logger.debug(
+                        "Groq API response in _make_request: %s",
+                        response_json['choices'][0]['message']['content']
+                    )
+                except (KeyError, TypeError):
+                    logger.debug("Groq API response in _make_request: content is missing in choices[0]")
                 return response_json
 
         except httpx.TimeoutException:
-            logger.error("DeepSeek API request timed out")
+            logger.error("Groq API request timeout in _make_request (30s)")
             return None
-        except Exception as e:
-            logger.error(f"DeepSeek API request failed: {str(e)}")
+        except httpx.RequestError as e:
+            logger.error("Groq API request failed in _make_request: %s", e)
             return None
 
     async def process_with_image(self, image_path: str, text: str, temperature: float = 0.7) -> Optional[Dict[str, Any]]:
-        """Send a request with both text and image to the LLM API."""
         try:
             request_id = str(hash(text))[:8]
-            logger.info(f"[{request_id}] Starting LLM processing with image: {image_path}")
-            
+            logger.info("[%s] Starting Groq processing with image: %s", request_id, image_path)
+
             base64_image = self._encode_image_to_base64(image_path)
             if not base64_image:
-                logger.error(f"[{request_id}] Failed to encode image")
+                logger.error("[%s] Failed to encode image in process_with_image", request_id)
                 return {
                     "result": False,
                     "comment": "Failed to encode image"
                 }
-            
-            # Create multimodal content format
+
             content = [
                 {"type": "text", "text": text},
                 {"type": "image_url", "image_url": {"url": base64_image}}
             ]
-            
+
             messages = [
                 {"role": "user", "content": content}
             ]
-            
+
             api_start_time = datetime.now()
             response = await self._make_request(messages, temperature)
             api_end_time = datetime.now()
             api_duration = (api_end_time - api_start_time).total_seconds()
-            
-            logger.info(f"[{request_id}] API request with image completed in {api_duration:.2f} seconds")
-            
+
+            logger.info("[%s] Groq API request with image completed in %.2f seconds", request_id, api_duration)
+
             if not response:
-                logger.error(f"[{request_id}] API request with image failed")
+                logger.error("[%s] Groq API request with image failed in process_with_image", request_id)
                 return {
                     "result": False,
                     "comment": "LLM API error: request timeout or service unavailable"
                 }
-            
+
             content = response["choices"][0]["message"]["content"]
-            
-            # Add token usage information if available
-            result = {"result": True, "content": content}
+            result: Dict[str, Any] = {"result": True, "content": content}
             if "usage" in response:
                 result["tokens_used"] = response["usage"].get("total_tokens", 0)
-            
+
             return result
-            
-        except Exception as e:
-            logger.error(f"Error processing image request: {str(e)}")
+
+        except (httpx.RequestError, ValueError, KeyError, TypeError) as e:
+            logger.error("Error in process_with_image: %s", e)
             return {
                 "result": False,
                 "comment": f"Error processing image request: {str(e)}"
             }
 
     async def parse_calendar_event(self, text: str, image_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        # Start time timestamp
         start_time = datetime.now()
-        request_id = str(hash(text))[:8]  # Short ID for request tracking
-        logger.info(f"[{request_id}] Starting LLM processing for: {text}")
-        
+        request_id = str(hash(text))[:8]
+        logger.info("[%s] Starting Groq processing for: %s", request_id, text)
+
         if image_path:
-            logger.info(f"[{request_id}] Image provided: {image_path}")
-        
+            logger.info("[%s] Image provided in parse_calendar_event: %s", request_id, image_path)
+
         current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = f"""
 You are a calendar event parser. Extract the following information from the text and return it in valid JSON format.
@@ -250,7 +257,7 @@ Input date parsing logic:
 7.  - If there is no time statement, only a date statement, and it is one day, then return the business hours: 10:00-18:00
     - If the text specifies multiple days (March 20-26), then you MUST return 00:00:00 for start_time and 23:59:59 for end_time
     - Example: "20–28 августа" should be "2024-08-20T00:00:00" to "2024-08-28T23:59:59"
-        
+
 Current date and time: {current_datetime}
     Calendar for the next 14 days:
 {await self._generate_calendar()}
@@ -273,75 +280,70 @@ Example of failed parsing (if there is not enough information, e.g. only month w
     "result": false,
     "comment": "Недостаточно информации о дате" #Описание того, почему не удалось распознать событие
 }}
-
 """
-        
-        # Prepare messages for API request
+
         if image_path:
-            # If image is provided, create multimodal content for both system and user messages
             base64_image = self._encode_image_to_base64(image_path)
             if not base64_image:
-                logger.error(f"[{request_id}] Failed to encode image")
+                logger.error("[%s] Failed to encode image in parse_calendar_event", request_id)
                 return {
                     "result": False,
                     "comment": "Failed to encode image"
                 }
-            
+
             system_content = [{"type": "text", "text": system_prompt}]
             system_message = {"role": "system", "content": system_content}
-            
+
             user_content = [
                 {"type": "text", "text": text},
                 {"type": "image_url", "image_url": {"url": base64_image}}
             ]
             user_message = {"role": "user", "content": user_content}
         else:
-            # Regular text request
             system_message = {"role": "system", "content": system_prompt}
             user_message = {"role": "user", "content": text}
-        
-        messages = [system_message, user_message]
-        
+
+        messages = cast(List[Dict[str, Any]], [system_message, user_message])
+
         try:
             api_start_time = datetime.now()
             response = await self._make_request(messages)
             api_end_time = datetime.now()
             api_duration = (api_end_time - api_start_time).total_seconds()
-            
-            logger.info(f"[{request_id}] API request completed in {api_duration:.2f} seconds")
-            
+
+            logger.info("[%s] Groq API request completed in %.2f seconds", request_id, api_duration)
+
             if not response:
-                logger.error(f"[{request_id}] API request failed")
+                logger.error("[%s] Groq API request failed in parse_calendar_event", request_id)
                 return {
                     "result": False,
                     "comment": "LLM API error: request timeout or service unavailable"
                 }
-                
+
             content = response["choices"][0]["message"]["content"]
-            # Remove markdown code block if present
             if content.startswith("```"):
                 content = content.split("\n", 1)[1].rsplit("\n", 1)[0]
             result = json.loads(content)
-            
-            # Add token usage information
+
             if "usage" in response:
                 result["tokens_used"] = response["usage"].get("total_tokens", 0)
-            
-            # Total processing time
-            end_time = datetime.now()
-            total_duration = (end_time - start_time).total_seconds()
-            logger.info(f"[{request_id}] Total processing completed in {total_duration:.2f} seconds")
-            
+
+            end_time_dt = datetime.now()
+            total_duration = (end_time_dt - start_time).total_seconds()
+            logger.info("[%s] Total Groq processing completed in %.2f seconds", request_id, total_duration)
+
             return result
         except (KeyError, json.JSONDecodeError) as e:
-            logger.error(f"[{request_id}] Failed to parse DeepSeek response: {str(e)}")
+            logger.error("[%s] Failed to parse Groq response in parse_calendar_event: %s", request_id, e)
             return {
                 "result": False,
                 "comment": f"Failed to parse LLM response: {str(e)}"
             }
-        except Exception as e:
-            logger.error(f"[{request_id}] Unexpected error: {str(e)}")
+        except (httpx.RequestError, ValueError, TypeError) as e:
+            logger.error("[%s] Unexpected error in parse_calendar_event: %s", request_id, e)
             return {
                 "result": False,
                 "comment": f"Unexpected error: {str(e)}"
             }
+
+

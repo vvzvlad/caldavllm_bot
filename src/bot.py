@@ -1,10 +1,13 @@
 import asyncio
+import os
+import tempfile
 from datetime import datetime
 from loguru import logger
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from .config import get_settings
 from .llm import DeepSeekLLM
+from .llm_groq import GroqLLM
 from .calendar import CalendarManager
 from .users import UserManager
 
@@ -13,7 +16,8 @@ class CalendarBot:
         self.settings = get_settings()
         self.bot = Bot(token=self.settings["telegram_token"])
         self.dp = Dispatcher()
-        self.llm = DeepSeekLLM()
+        #self.llm = DeepSeekLLM()
+        self.llm = GroqLLM()
         self.calendar = CalendarManager()
         self.user_manager = UserManager()
         self.parsed_events = {}
@@ -54,10 +58,30 @@ class CalendarBot:
                 logger.error(f"Error sending typing status: {str(e)}")
                 break
 
-    async def _process_message(self, message: types.Message):
+    async def _download_photo(self, message: types.Message) -> str:
+        """Download photo from message and return the local path"""
+        try:
+            # Get the photo with highest resolution
+            photo = message.photo[-1]
+            
+            # Create a temporary file to save the photo
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
+                temp_path = temp_file.name
+                
+            # Download the photo
+            await self.bot.download(photo.file_id, destination=temp_path)
+            logger.info(f"Downloaded photo to {temp_path}")
+            
+            return temp_path
+        except Exception as e:
+            logger.error(f"Failed to download photo: {e}")
+            return None
+
+    async def _process_message_with_image(self, message: types.Message, text: str = None, image_path: str = None):
+        """Process a message with optional image and text"""
         try:
             if not self.user_manager.has_caldav_credentials(message.from_user.id):
-                await message.reply( "Сначала нужно настроить подключение к календарю. Используй команду /caldav, /google или /fastmail" )
+                await message.reply("Сначала нужно настроить подключение к календарю. Используй команду /caldav, /google или /fastmail")
                 return
 
             if not self.user_manager.check_token_limit(message.from_user.id):
@@ -66,14 +90,21 @@ class CalendarBot:
                     "Попробуйте завтра."
                 )
                 return
+            
+            # Use message caption if text is not provided
+            if text is None and message.caption:
+                text = message.caption
+            
+            # Default text if none provided
+            if not text:
+                text = "Добавь это событие в календарь"
+                
+            logger.info(f"Processing message from {message.from_user.id}: text={text}, has_image={image_path is not None}")
 
-            logger.info(f"Received message from {message.from_user.id}: {message.text}")
-
-            llm = DeepSeekLLM()
             
             typing_task = asyncio.create_task(self._send_typing_status(message.chat.id))
             try:
-                event = await llm.parse_calendar_event(message.text)
+                event = await self.llm.parse_calendar_event(text, image_path)
             finally:
                 typing_task.cancel()
                 try:
@@ -81,8 +112,16 @@ class CalendarBot:
                 except asyncio.CancelledError:
                     pass
 
+            # Clean up temporary file if it exists
+            if image_path and os.path.exists(image_path):
+                try:
+                    os.unlink(image_path)
+                    logger.info(f"Deleted temporary file {image_path}")
+                except Exception as e:
+                    logger.error(f"Failed to delete temporary file: {e}")
+
             if not event:
-                await message.reply( "Внутренняя ошибка при обработке сообщения. Попробуйте позже." )
+                await message.reply("Internal error processing the message. Please try again later.")
                 return
             
             tokens_used = event.get("tokens_used", 0) if isinstance(event, dict) else 0
@@ -90,8 +129,8 @@ class CalendarBot:
             self.user_manager.add_tokens_used(message.from_user.id, tokens_used)
             
             if not event["result"]:
-                error_text = event.get("comment", "Неизвестная ошибка")
-                await message.reply(  f"❌ {error_text}" )
+                error_text = event.get("comment", "Unknown error")
+                await message.reply(f"❌ {error_text}")
                 return
             
             keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
@@ -108,6 +147,23 @@ class CalendarBot:
         except Exception as e:
             logger.error(f"Error processing message: {str(e)}")
             await message.reply("Произошла ошибка при обработке сообщения. Попробуйте еще раз.")
+
+    async def _process_message(self, message: types.Message):
+        """Process a regular text message"""
+        await self._process_message_with_image(message, text=message.text)
+
+    async def _process_photo(self, message: types.Message):
+        """Process a photo message with optional caption"""
+        try:
+            image_path = await self._download_photo(message)
+            if not image_path:
+                await message.reply("Failed to process the image. Please try again.")
+                return
+                
+            await self._process_message_with_image(message, text=message.caption, image_path=image_path)
+        except Exception as e:
+            logger.error(f"Error processing photo: {str(e)}")
+            await message.reply("Error processing the image. Please try again.")
 
     async def _process_callback(self, callback_query: types.CallbackQuery):
         try:
@@ -162,6 +218,7 @@ class CalendarBot:
                 "• Завтра в 15:00 встреча с клиентом\n"
                 "• 25 марта в 11 утра лекция о японском символизме\n"
                 "• Встреча в офисе в понедельник в 10:00\n\n"
+                "Ты также можешь отправить мне изображение приглашения или афиши события.\n\n"
                 "Я пойму текст и добавлю событие в твой календарь."
             )
             await message.reply(welcome_text)
@@ -335,14 +392,19 @@ class CalendarBot:
             )
             await message.reply(stats_text)
 
+        @self.dp.message(lambda message: message.photo)
+        async def handle_photo(message: types.Message):
+            # Create task for processing photo
+            asyncio.create_task(self._process_photo(message))
+
         @self.dp.message()
         async def handle_message(message: types.Message):
-            # Создаем таск для обработки сообщения
+            # Create task for processing message
             asyncio.create_task(self._process_message(message))
 
         @self.dp.callback_query()
         async def handle_callback(callback_query: types.CallbackQuery):
-            # Создаем таск для обработки колбэка
+            # Create task for processing callback
             asyncio.create_task(self._process_callback(callback_query))
 
     async def _advertise_commands(self):

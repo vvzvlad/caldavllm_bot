@@ -17,7 +17,7 @@ def get_settings():
 
     caldav_timezone = os.getenv("CALDAV_TIMEZONE", "Europe/Moscow")
 
-    model = os.getenv("MODEL", "deepseek-chat")
+    model = os.getenv("MODEL", "openai/gpt-oss-120b")
 
     # Get daily token limit from env or use default
     daily_token_limit = int(os.getenv("DAILY_TOKEN_LIMIT", "30000"))
