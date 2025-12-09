@@ -6,8 +6,7 @@ from loguru import logger
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from .config import get_settings
-from .llm import DeepSeekLLM
-from .llm_groq import GroqLLM
+from .llm import get_llm
 from .calendar import CalendarManager
 from .users import UserManager
 
@@ -16,8 +15,8 @@ class CalendarBot:
         self.settings = get_settings()
         self.bot = Bot(token=self.settings["telegram_token"])
         self.dp = Dispatcher()
-        #self.llm = DeepSeekLLM()
-        self.llm = GroqLLM()
+        # LLM backend is selected via configuration in src.config / src.llm
+        self.llm = get_llm()
         self.calendar = CalendarManager()
         self.user_manager = UserManager()
         self.parsed_events = {}

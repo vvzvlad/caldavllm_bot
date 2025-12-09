@@ -2,6 +2,7 @@ import os
 from loguru import logger
 from dotenv import load_dotenv
 
+
 def get_settings():
     load_dotenv()
 
@@ -19,6 +20,9 @@ def get_settings():
 
     model = os.getenv("MODEL", "openai/gpt-oss-120b")
 
+    # Which LLM provider to use: "deepseek" (default), "groq", etc.
+    llm_provider = os.getenv("LLM_PROVIDER", "deepseek")
+
     # Get daily token limit from env or use default
     daily_token_limit = int(os.getenv("DAILY_TOKEN_LIMIT", "30000"))
 
@@ -29,5 +33,6 @@ def get_settings():
         "caldav": {
             "timezone": caldav_timezone
         },
-        "daily_token_limit": daily_token_limit
-    } 
+        "daily_token_limit": daily_token_limit,
+        "llm_provider": llm_provider,
+    }
