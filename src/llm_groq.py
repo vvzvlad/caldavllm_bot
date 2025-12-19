@@ -259,8 +259,7 @@ When analyzing a dialogue:
 - The person marked as "(пользователь календаря)" is the calendar owner
 - Events should be created from the perspective of the calendar owner
 - Pay attention to WHO is inviting WHOM - the calendar owner's events are what matter
-- Example: If "Маша: Давай встретимся в пятницу в 15:00" and Петя is the calendar owner,
-  then Петя has a meeting with Маша on Friday at 15:00
+- Example: If "Маша: Давай встретимся в пятницу в 15:00 Петя: Давай" and Петя is the calendar owner, event "has a meeting with Маша on Friday at 15:00"
 - Extract event details from the conversation context
 - Different parts of the event info may be spread across multiple messages
 - You must combine all this information into a single event
