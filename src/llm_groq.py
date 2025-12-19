@@ -234,7 +234,11 @@ class GroqLLM:
                 }
             
             # Combine original text with OCR-extracted text
-            combined_text = f"{text}\n\nТекст с изображения:\n{ocr_text}"
+            # If caption exists (not default text), prepend it with "#" marker for high priority
+            if text and text != "Добавь это событие в календарь":
+                combined_text = f"# {text}\n\nТекст с изображения:\n{ocr_text}"
+            else:
+                combined_text = f"Текст с изображения:\n{ocr_text}"
             logger.info("[%s] Combined text for parsing: %s", request_id, combined_text[:200] if len(combined_text) > 200 else combined_text)
 
         current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

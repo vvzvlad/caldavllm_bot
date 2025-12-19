@@ -326,8 +326,10 @@ Example of failed parsing (if there is not enough information, e.g. only month w
             system_content = [{"type": "text", "text": system_prompt}]
             system_message = {"role": "system", "content": system_content}
             
+            # If caption exists (not default text), prepend it with "#" marker for high priority
+            caption_text = f"# {text}" if text and text != "Добавь это событие в календарь" else text
             user_content = [
-                {"type": "text", "text": text},
+                {"type": "text", "text": caption_text},
                 {"type": "image_url", "image_url": {"url": base64_image}}
             ]
             user_message = {"role": "user", "content": user_content}
