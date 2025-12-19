@@ -27,7 +27,7 @@ def get_settings():
     daily_token_limit = int(os.getenv("DAILY_TOKEN_LIMIT", "30000"))
 
     # Message batching settings
-    batch_timeout = float(os.getenv("MESSAGE_BATCH_TIMEOUT", "2.0"))
+    batch_timeout = float(os.getenv("MESSAGE_BATCH_TIMEOUT", "0.8"))
     max_batch_size = int(os.getenv("MAX_BATCH_SIZE", "20"))
 
     return {
