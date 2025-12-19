@@ -27,7 +27,8 @@ class GroqLLM:
     def __init__(self):
         self.settings = get_settings()
         self.api_key = self.settings["api_key"]
-        self.model = self.settings["model"]
+        self.model_text = "openai/gpt-oss-120b"
+        self.model_ocr = "meta-llama/llama-4-scout-17b-16e-instruct"
         self.base_url = "https://api.groq.com/openai/v1/chat/completions"
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -97,10 +98,12 @@ class GroqLLM:
                     self.base_url,
                     headers=self.headers,
                     json={
-                        "model": self.model,
+                        "model": self.model_text,
                         "messages": messages,
                         "temperature": temperature,
-                        "reasoning_effort": "medium"
+                        "reasoning_effort": "high",
+                        "stream": False,
+                        "response_format": {"type": "json_object"},
                     }
                 )
 
