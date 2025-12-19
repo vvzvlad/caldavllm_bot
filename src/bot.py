@@ -1,7 +1,9 @@
 import asyncio
 import os
 import tempfile
+from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Callable, Awaitable
 from loguru import logger
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -9,6 +11,129 @@ from .config import get_settings
 from .llm import get_llm
 from .calendar import CalendarManager
 from .users import UserManager
+
+
+@dataclass
+class MessageBatch:
+    """Represents a batch of messages from a single user"""
+    messages: list[str] = field(default_factory=list)
+    images: list[str] = field(default_factory=list)  # Paths to downloaded images
+    timer: asyncio.TimerHandle | None = None
+    first_message_time: float = 0.0
+    first_message: types.Message | None = None  # Reference to first message for reply
+
+
+class MessageBatcher:
+    """Manages message batching with debounce timeout"""
+    
+    def __init__(
+        self,
+        process_callback: Callable[["MessageBatch", types.Message], Awaitable[None]],
+        batch_timeout: float = 2.0,
+        max_batch_size: int = 20
+    ):
+        """
+        Args:
+            process_callback: Async function to call when batch is ready
+                             Signature: async def callback(batch: MessageBatch, first_message: types.Message)
+            batch_timeout: Seconds to wait before processing batch
+            max_batch_size: Maximum messages per batch (triggers immediate processing)
+        """
+        self._batches: dict[int, MessageBatch] = {}  # user_id -> batch
+        self._process_callback = process_callback
+        self._batch_timeout = batch_timeout
+        self._max_batch_size = max_batch_size
+    
+    async def add_message(
+        self,
+        user_id: int,
+        text: str | None,
+        image_path: str | None,
+        message: types.Message
+    ) -> None:
+        """Add a message to the user's batch, resetting the timer"""
+        
+        # Cancel existing timer if any
+        if user_id in self._batches:
+            batch = self._batches[user_id]
+            if batch.timer:
+                batch.timer.cancel()
+                batch.timer = None
+        else:
+            # Create new batch
+            batch = MessageBatch(
+                first_message_time=asyncio.get_event_loop().time(),
+                first_message=message
+            )
+            self._batches[user_id] = batch
+        
+        # Add message content to batch
+        if text:
+            batch.messages.append(text)
+        if image_path:
+            batch.images.append(image_path)
+        
+        # Check if max batch size reached
+        total_items = len(batch.messages) + len(batch.images)
+        if total_items >= self._max_batch_size:
+            logger.info(f"Max batch size ({self._max_batch_size}) reached for user {user_id}, processing immediately")
+            await self._process_batch(user_id)
+            return
+        
+        # Schedule processing with debounce
+        self._schedule_processing(user_id)
+    
+    def _schedule_processing(self, user_id: int) -> None:
+        """Schedule batch processing after timeout"""
+        if user_id not in self._batches:
+            return
+            
+        batch = self._batches[user_id]
+        
+        # Cancel existing timer
+        if batch.timer:
+            batch.timer.cancel()
+        
+        # Create new timer using call_later
+        loop = asyncio.get_event_loop()
+        batch.timer = loop.call_later(
+            self._batch_timeout,
+            lambda: asyncio.create_task(self._process_batch(user_id))
+        )
+    
+    async def _process_batch(self, user_id: int) -> None:
+        """Process the batch for a user"""
+        if user_id not in self._batches:
+            return
+        
+        batch = self._batches.pop(user_id)
+        
+        # Cancel timer if still active
+        if batch.timer:
+            batch.timer.cancel()
+            batch.timer = None
+        
+        if not batch.messages and not batch.images:
+            logger.warning(f"Empty batch for user {user_id}, skipping")
+            return
+        
+        logger.info(
+            f"Processing batch for user {user_id}: "
+            f"{len(batch.messages)} messages, {len(batch.images)} images"
+        )
+        
+        try:
+            await self._process_callback(batch, batch.first_message)
+        except Exception as e:
+            logger.error(f"Error processing batch for user {user_id}: {e}")
+            # Clean up images on error
+            for img_path in batch.images:
+                if img_path and os.path.exists(img_path):
+                    try:
+                        os.unlink(img_path)
+                    except Exception as del_err:
+                        logger.error(f"Failed to delete temp image: {del_err}")
+
 
 class CalendarBot:
     def __init__(self):
@@ -20,6 +145,14 @@ class CalendarBot:
         self.calendar = CalendarManager()
         self.user_manager = UserManager()
         self.parsed_events = {}
+        
+        # Initialize message batcher with settings from config
+        self.message_batcher = MessageBatcher(
+            process_callback=self._process_batched_messages,
+            batch_timeout=self.settings.get("batch_timeout", 2.0),
+            max_batch_size=self.settings.get("max_batch_size", 20)
+        )
+        
         self._setup_handlers()
 
     def _format_datetime(self, iso_datetime: str) -> str:
@@ -200,6 +333,36 @@ class CalendarBot:
         except Exception as e:
             logger.error(f"Error handling callback: {str(e)}")
             await callback_query.answer("Произошла ошибка")
+
+    async def _process_batched_messages(self, batch: MessageBatch, first_message: types.Message) -> None:
+        """Process a batch of messages as a single unit"""
+        # Combine all message texts with separator
+        combined_text = "\n\n---\n\n".join(batch.messages) if batch.messages else None
+        
+        # Use first image if any, or None
+        image_path = batch.images[0] if batch.images else None
+        
+        logger.info(
+            f"Processing batched messages for user {first_message.from_user.id}: "
+            f"combined_text_length={len(combined_text) if combined_text else 0}, "
+            f"using_image={image_path is not None}"
+        )
+        
+        # Process the combined message
+        await self._process_message_with_image(
+            first_message,
+            text=combined_text,
+            image_path=image_path
+        )
+        
+        # Clean up any additional images (first one is cleaned up by _process_message_with_image)
+        for img_path in batch.images[1:]:
+            if img_path and os.path.exists(img_path):
+                try:
+                    os.unlink(img_path)
+                    logger.info(f"Deleted additional temp image {img_path}")
+                except Exception as e:
+                    logger.error(f"Failed to delete temp image: {e}")
 
     def _setup_handlers(self):
         @self.dp.message(Command("start"))
@@ -393,13 +556,27 @@ class CalendarBot:
 
         @self.dp.message(lambda message: message.photo)
         async def handle_photo(message: types.Message):
-            # Create task for processing photo
-            asyncio.create_task(self._process_photo(message))
+            # Download image first, then add to batch
+            image_path = await self._download_photo(message)
+            if not image_path:
+                await message.reply("Failed to process the image. Please try again.")
+                return
+            await self.message_batcher.add_message(
+                user_id=message.from_user.id,
+                text=message.caption,
+                image_path=image_path,
+                message=message
+            )
 
         @self.dp.message()
         async def handle_message(message: types.Message):
-            # Create task for processing message
-            asyncio.create_task(self._process_message(message))
+            # Add message to batch for debounced processing
+            await self.message_batcher.add_message(
+                user_id=message.from_user.id,
+                text=message.text,
+                image_path=None,
+                message=message
+            )
 
         @self.dp.callback_query()
         async def handle_callback(callback_query: types.CallbackQuery):

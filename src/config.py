@@ -26,6 +26,10 @@ def get_settings():
     # Get daily token limit from env or use default
     daily_token_limit = int(os.getenv("DAILY_TOKEN_LIMIT", "30000"))
 
+    # Message batching settings
+    batch_timeout = float(os.getenv("MESSAGE_BATCH_TIMEOUT", "2.0"))
+    max_batch_size = int(os.getenv("MAX_BATCH_SIZE", "20"))
+
     return {
         "api_key": api_key,
         "model": model,
@@ -35,4 +39,6 @@ def get_settings():
         },
         "daily_token_limit": daily_token_limit,
         "llm_provider": llm_provider,
+        "batch_timeout": batch_timeout,
+        "max_batch_size": max_batch_size,
     }
