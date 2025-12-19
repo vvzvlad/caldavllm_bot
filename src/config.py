@@ -6,9 +6,16 @@ from dotenv import load_dotenv
 def get_settings():
     load_dotenv()
 
-    api_key = os.getenv("LLM_API_KEY")
-    if not api_key:
-        logger.error("LLM_API_KEY must be set")
+    # Legacy generic API key (for backward compatibility)
+    legacy_api_key = os.getenv("LLM_API_KEY")
+
+    # Provider-specific API keys with fallback to legacy key
+    deepseek_api_key = os.getenv("DEEPSEEK_API_KEY") or legacy_api_key
+    groq_api_key = os.getenv("GROQ_API_KEY") or legacy_api_key
+
+    # Ensure at least one API key is available
+    if not deepseek_api_key and not groq_api_key:
+        logger.error("At least one API key must be set: DEEPSEEK_API_KEY, GROQ_API_KEY, or LLM_API_KEY (legacy)")
         os._exit(1)
 
     telegram_token = os.getenv("BOT_TOKEN")
@@ -31,7 +38,8 @@ def get_settings():
     max_batch_size = int(os.getenv("MAX_BATCH_SIZE", "30"))
 
     return {
-        "api_key": api_key,
+        "deepseek_api_key": deepseek_api_key,
+        "groq_api_key": groq_api_key,
         "model": model,
         "telegram_token": telegram_token,
         "caldav": {

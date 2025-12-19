@@ -22,7 +22,7 @@ from .config import get_settings
 class DeepSeekLLM:
     def __init__(self):
         self.settings = get_settings()
-        self.api_key = self.settings["api_key"]
+        self.api_key = self.settings["deepseek_api_key"]
         self.model = self.settings["model"]
         self.base_url = "https://api.deepseek.com/v1/chat/completions"
         self.headers = {

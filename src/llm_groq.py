@@ -26,7 +26,7 @@ httpx = importlib.import_module('httpx')
 class GroqLLM:
     def __init__(self):
         self.settings = get_settings()
-        self.api_key = self.settings["api_key"]
+        self.api_key = self.settings["groq_api_key"]
         self.model_text = "openai/gpt-oss-120b"
         self.model_ocr = "meta-llama/llama-4-scout-17b-16e-instruct"
         self.base_url = "https://api.groq.com/openai/v1/chat/completions"
