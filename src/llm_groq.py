@@ -128,63 +128,114 @@ class GroqLLM:
             logger.error("Groq API request failed in _make_request: %s", e)
             return None
 
-    async def process_with_image(self, image_path: str, text: str, temperature: float = 0.7) -> Optional[Dict[str, Any]]:
+    async def _make_ocr_request(self, messages: List[Dict[str, Any]], temperature: float = 0.3) -> Optional[Dict[str, Any]]:
+        """Make OCR request using model_ocr without JSON response format."""
         try:
-            request_id = str(hash(text))[:8]
-            logger.info("[%s] Starting Groq processing with image: %s", request_id, image_path)
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    self.base_url,
+                    headers=self.headers,
+                    json={
+                        "model": self.model_ocr,
+                        "messages": messages,
+                        "temperature": temperature,
+                        "stream": False,
+                    }
+                )
 
-            base64_image = self._encode_image_to_base64(image_path)
-            if not base64_image:
-                logger.error("[%s] Failed to encode image in process_with_image", request_id)
-                return {
-                    "result": False,
-                    "comment": "Failed to encode image"
-                }
+                if response.status_code != 200:
+                    logger.error("Groq OCR API error %s in _make_ocr_request: %s", response.status_code, response.text)
+                    return None
 
-            content = [
-                {"type": "text", "text": text},
-                {"type": "image_url", "image_url": {"url": base64_image}}
-            ]
+                response_json = response.json()
+                try:
+                    logger.debug(
+                        "Groq OCR API response in _make_ocr_request: %s",
+                        response_json['choices'][0]['message']['content']
+                    )
+                except (KeyError, TypeError):
+                    logger.debug("Groq OCR API response in _make_ocr_request: content is missing in choices[0]")
+                return response_json
 
-            messages = [
-                {"role": "user", "content": content}
-            ]
+        except httpx.TimeoutException:
+            logger.error("Groq OCR API request timeout in _make_ocr_request (60s)")
+            return None
+        except httpx.RequestError as e:
+            logger.error("Groq OCR API request failed in _make_ocr_request: %s", e)
+            return None
 
-            api_start_time = datetime.now()
-            response = await self._make_request(messages, temperature)
-            api_end_time = datetime.now()
-            api_duration = (api_end_time - api_start_time).total_seconds()
-
-            logger.info("[%s] Groq API request with image completed in %.2f seconds", request_id, api_duration)
-
-            if not response:
-                logger.error("[%s] Groq API request with image failed in process_with_image", request_id)
-                return {
-                    "result": False,
-                    "comment": "LLM API error: request timeout or service unavailable"
-                }
-
-            content = response["choices"][0]["message"]["content"]
-            result: Dict[str, Any] = {"result": True, "content": content}
-            if "usage" in response:
-                result["tokens_used"] = response["usage"].get("total_tokens", 0)
-
-            return result
-
-        except (httpx.RequestError, ValueError, KeyError, TypeError) as e:
-            logger.error("Error in process_with_image: %s", e)
-            return {
-                "result": False,
-                "comment": f"Error processing image request: {str(e)}"
+    async def _ocr_image(self, image_path: str, request_id: str) -> Optional[str]:
+        """Extract text from image using OCR model.
+        
+        Args:
+            image_path: Path to the image file
+            request_id: Request ID for logging traceability
+            
+        Returns:
+            Extracted text from the image, or None on failure
+        """
+        logger.info("[%s] Starting OCR extraction for image: %s", request_id, image_path)
+        
+        base64_image = self._encode_image_to_base64(image_path)
+        if not base64_image:
+            logger.error("[%s] Failed to encode image in _ocr_image", request_id)
+            return None
+        
+        messages: List[Dict[str, Any]] = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Распознай и извлеки весь текст с этого изображения. Верни только распознанный текст без дополнительных комментариев."},
+                    {"type": "image_url", "image_url": {"url": base64_image}}
+                ]
             }
+        ]
+        
+        try:
+            ocr_start_time = datetime.now()
+            response = await self._make_ocr_request(messages)
+            ocr_end_time = datetime.now()
+            ocr_duration = (ocr_end_time - ocr_start_time).total_seconds()
+            
+            logger.info("[%s] OCR request completed in %.2f seconds", request_id, ocr_duration)
+            
+            if not response:
+                logger.error("[%s] OCR request failed in _ocr_image", request_id)
+                return None
+            
+            extracted_text = response["choices"][0]["message"]["content"]
+            logger.info("[%s] OCR extracted text: %s", request_id, extracted_text[:200] if len(extracted_text) > 200 else extracted_text)
+            
+            return extracted_text
+            
+        except (KeyError, TypeError) as e:
+            logger.error("[%s] Failed to parse OCR response in _ocr_image: %s", request_id, e)
+            return None
+        except (httpx.RequestError, ValueError) as e:
+            logger.error("[%s] Unexpected error in _ocr_image: %s", request_id, e)
+            return None
 
     async def parse_calendar_event(self, text: str, image_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
         start_time = datetime.now()
         request_id = str(hash(text))[:8]
         logger.info("[%s] Starting Groq processing for: %s", request_id, text)
 
+        # OCR-first pipeline: if image is provided, extract text first
+        combined_text = text
         if image_path:
-            logger.info("[%s] Image provided in parse_calendar_event: %s", request_id, image_path)
+            logger.info("[%s] Image provided in parse_calendar_event: %s, starting OCR extraction", request_id, image_path)
+            
+            ocr_text = await self._ocr_image(image_path, request_id)
+            if ocr_text is None:
+                logger.error("[%s] OCR extraction failed in parse_calendar_event", request_id)
+                return {
+                    "result": False,
+                    "comment": "Failed to extract text from image (OCR error)"
+                }
+            
+            # Combine original text with OCR-extracted text
+            combined_text = f"{text}\n\nТекст с изображения:\n{ocr_text}"
+            logger.info("[%s] Combined text for parsing: %s", request_id, combined_text[:200] if len(combined_text) > 200 else combined_text)
 
         current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = f"""
@@ -202,24 +253,24 @@ IMPORTANT TIMEZONE HANDLING:
 
 Required output fields:
 - title: event title. Format based on event type (keep it as short as possible):
-    * The headline is the most concise description of what the event is about. 
-    * It should be as short as possible, but not so short as to lose information. 
-    * Don't write generic words like "Встреча", "Звонок", always be specific about who exactly the meeting is with and who exactly the call is with. Often, you can do without common words at all: For example, not "Доктор", but "Дерматолог". Not "Встреча" but "Обсуждение работы". Not "встреча с HR" but "собеседование".  
-    * If I'm asking to be reminded of something, such as "напомни мне вывести деньги", I should write "Вывести деньги". 
-    * Use abbreviations: instead of "День рождения Иры", write "ДР Иры". 
+    * The headline is the most concise description of what the event is about.
+    * It should be as short as possible, but not so short as to lose information.
+    * Don't write generic words like "Встреча", "Звонок", always be specific about who exactly the meeting is with and who exactly the call is with. Often, you can do without common words at all: For example, not "Доктор", but "Дерматолог". Not "Встреча" but "Обсуждение работы". Not "встреча с HR" but "собеседование".
+    * If I'm asking to be reminded of something, such as "напомни мне вывести деньги", I should write "Вывести деньги".
+    * Use abbreviations: instead of "День рождения Иры", write "ДР Иры".
     * Don't write long phrases: "Звонок с коллегами по поводу уточнения новых требований к ПО" will be cut off by any calendar and there will remain just "Звонок с колл....", and it doesn't allow to understand what the meeting is about. Instead, it would be better to write "Звонок Требования ПО"
     *DON'T FANTASIZE. you are obliged to write ONLY WHAT IS in the text given to you. Any fantasy will get you points when it is discovered.
     * Start with capital letters
-    * ALWAYS use Russian language! 
+    * ALWAYS use Russian language!
     * ALWAYS keep title short and concise (under 100 characters)
 - start_time: event start time (in ISO format, Moscow time)
 - end_time: event end time (in ISO format, Moscow time). If duration is specified, use it, otherwise set to 1 hour after start_time
 - description: detailed description of the event:
-    * Any additional information that is not duplicated in the title. If you receive an appointment with a doctor ("Запись к врачу-дерматологу в 14 часов, адрес большая шихстинская, с собой надо взять медкарту, не есть 12 часов, оплата 5000р"), you should put the most important thing in the title: "Дерматолог", time and address - in the time and date fields, and all other information - in the description field: "Взять медкарту, не есть 12 часов, оплата 5000₽". 
+    * Any additional information that is not duplicated in the title. If you receive an appointment with a doctor ("Запись к врачу-дерматологу в 14 часов, адрес большая шихстинская, с собой надо взять медкарту, не есть 12 часов, оплата 5000р"), you should put the most important thing in the title: "Дерматолог", time and address - in the time and date fields, and all other information - in the description field: "Взять медкарту, не есть 12 часов, оплата 5000₽".
     * A good description should fit in 300 characters or less.
     *DON'T FANTASIZE. you are obliged to write ONLY WHAT IS in the text given to you. Any fantasy will get you points when it is discovered.
-    * Start with capital letters 
-    * ALWAYS use Russian language! 
+    * Start with capital letters
+    * ALWAYS use Russian language!
     * ALWAYS keep descriptions short and concise (under 300 characters)
 - location: event location. Format based on event type:
     * For physical locations: "//name//, //address//" (include point name!)
@@ -286,26 +337,9 @@ Example of failed parsing (if there is not enough information, e.g. only month w
 }}
 """
 
-        if image_path:
-            base64_image = self._encode_image_to_base64(image_path)
-            if not base64_image:
-                logger.error("[%s] Failed to encode image in parse_calendar_event", request_id)
-                return {
-                    "result": False,
-                    "comment": "Failed to encode image"
-                }
-
-            system_content = [{"type": "text", "text": system_prompt}]
-            system_message = {"role": "system", "content": system_content}
-
-            user_content = [
-                {"type": "text", "text": text},
-                {"type": "image_url", "image_url": {"url": base64_image}}
-            ]
-            user_message = {"role": "user", "content": user_content}
-        else:
-            system_message = {"role": "system", "content": system_prompt}
-            user_message = {"role": "user", "content": text}
+        # Text-only parsing (image text already extracted via OCR if provided)
+        system_message = {"role": "system", "content": system_prompt}
+        user_message = {"role": "user", "content": combined_text}
 
         messages = cast(List[Dict[str, Any]], [system_message, user_message])
 
