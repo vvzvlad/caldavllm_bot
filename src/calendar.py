@@ -93,6 +93,14 @@ DTEND;TZID={timezone}:{end_time}"""
             if location:
                 event_data += f"\nLOCATION:{location}"
 
+            # Add VALARM for 1 hour before event
+            event_data += """
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Reminder
+TRIGGER:-PT1H
+END:VALARM"""
+
             event_data += "\nEND:VEVENT\nEND:VCALENDAR"
 
             # Add event to calendar
