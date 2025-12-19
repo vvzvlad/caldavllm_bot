@@ -36,7 +36,7 @@ class MessageBatcher:
         """
         Args:
             process_callback: Async function to call when batch is ready
-                             Signature: async def callback(batch: MessageBatch, first_message: types.Message)
+                                Signature: async def callback(batch: MessageBatch, first_message: types.Message)
             batch_timeout: Seconds to wait before processing batch
             max_batch_size: Maximum messages per batch (triggers immediate processing)
         """
@@ -48,28 +48,22 @@ class MessageBatcher:
     def _get_sender_name(self, message: types.Message) -> str:
         """Extract sender name from message, handling forwarded messages"""
         # Check if it's a forwarded message
-        if message.forward_from:
-            # Forwarded from a user who allows linking
+        if message.forward_from: # Forwarded from a user who allows linking
             return message.forward_from.first_name or message.forward_from.username or "Unknown"
-        elif message.forward_sender_name:
-            # Forwarded from a user who hides their account
+        elif message.forward_sender_name: # Forwarded from a user who hides their account
             return message.forward_sender_name
-        elif message.from_user:
-            # Regular message from user
+        elif message.from_user: # Regular message from user
             return message.from_user.first_name or message.from_user.username or "Unknown"
         return "Unknown"
     
     def _get_sender_user_id(self, message: types.Message) -> int | None:
         """Extract sender user_id from message, handling forwarded messages"""
         # Check if it's a forwarded message
-        if message.forward_from:
-            # Forwarded from a user who allows linking
+        if message.forward_from:   # Forwarded from a user who allows linking
             return message.forward_from.id
-        elif message.forward_sender_name:
-            # Forwarded from a user who hides their account - no user_id available
+        elif message.forward_sender_name: # Forwarded from a user who hides their account - no user_id available
             return None
-        elif message.from_user:
-            # Regular message from user
+        elif message.from_user: # Regular message from user
             return message.from_user.id
         return None
     

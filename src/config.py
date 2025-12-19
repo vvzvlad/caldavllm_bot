@@ -28,7 +28,7 @@ def get_settings():
 
     # Message batching settings
     batch_timeout = float(os.getenv("MESSAGE_BATCH_TIMEOUT", "0.8"))
-    max_batch_size = int(os.getenv("MAX_BATCH_SIZE", "20"))
+    max_batch_size = int(os.getenv("MAX_BATCH_SIZE", "30"))
 
     return {
         "api_key": api_key,
