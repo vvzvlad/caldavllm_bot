@@ -202,11 +202,20 @@ WARNING! 200 points are deducted for each mistake. You have 600 points left. Be 
 IMPORTANT: INPUT FORMAT
 The input may contain:
 1. A single message with event information
-2. Multiple messages separated by "---" (forwarded conversation or dialogue)
-   - In case of dialogue, analyze ALL messages together to extract complete event information
-   - Different parts of the event info may be spread across multiple messages
-   - Example: First message: "Давай встретимся" Second message: "В пятницу в 15:00" Third message: "В кофейне на Арбате"
-   - You must combine all this information into a single event
+2. A dialogue/conversation with multiple participants in format:
+   Name1: message text
+   Name2 (пользователь календаря): message text
+   ...
+   
+When analyzing a dialogue:
+- The person marked as "(пользователь календаря)" is the calendar owner
+- Events should be created from the perspective of the calendar owner
+- Pay attention to WHO is inviting WHOM - the calendar owner's events are what matter
+- Example: If "Маша: Давай встретимся в пятницу в 15:00" and Петя is the calendar owner,
+  then Петя has a meeting with Маша on Friday at 15:00
+- Extract event details from the conversation context
+- Different parts of the event info may be spread across multiple messages
+- You must combine all this information into a single event
 
 IMPORTANT TIMEZONE HANDLING:
 1. If timezone is specified (e.g. "по иркутскому времени", "по московскому времени", etc.):

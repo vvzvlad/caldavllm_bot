@@ -21,6 +21,7 @@ class MessageBatch:
     timer: asyncio.TimerHandle | None = None
     first_message_time: float = 0.0
     first_message: types.Message | None = None  # Reference to first message for reply
+    owner_user_id: int | None = None  # ID of the user who forwarded the dialogue (calendar owner)
 
 
 class MessageBatcher:
@@ -44,6 +45,52 @@ class MessageBatcher:
         self._batch_timeout = batch_timeout
         self._max_batch_size = max_batch_size
     
+    def _get_sender_name(self, message: types.Message) -> str:
+        """Extract sender name from message, handling forwarded messages"""
+        # Check if it's a forwarded message
+        if message.forward_from:
+            # Forwarded from a user who allows linking
+            return message.forward_from.first_name or message.forward_from.username or "Unknown"
+        elif message.forward_sender_name:
+            # Forwarded from a user who hides their account
+            return message.forward_sender_name
+        elif message.from_user:
+            # Regular message from user
+            return message.from_user.first_name or message.from_user.username or "Unknown"
+        return "Unknown"
+    
+    def _get_sender_user_id(self, message: types.Message) -> int | None:
+        """Extract sender user_id from message, handling forwarded messages"""
+        # Check if it's a forwarded message
+        if message.forward_from:
+            # Forwarded from a user who allows linking
+            return message.forward_from.id
+        elif message.forward_sender_name:
+            # Forwarded from a user who hides their account - no user_id available
+            return None
+        elif message.from_user:
+            # Regular message from user
+            return message.from_user.id
+        return None
+    
+    def _format_message_text(self, name: str, text: str, is_calendar_owner: bool = False) -> str:
+        """Format message as 'Name: text' with newlines removed
+        
+        Args:
+            name: Sender name
+            text: Message text
+            is_calendar_owner: If True, adds "(пользователь календаря)" marker after name
+        """
+        # Remove newlines and carriage returns, replace with space
+        clean_text = text.replace('\n', ' ').replace('\r', ' ')
+        # Remove multiple consecutive spaces
+        while '  ' in clean_text:
+            clean_text = clean_text.replace('  ', ' ')
+        
+        if is_calendar_owner:
+            return f"{name} (пользователь календаря): {clean_text.strip()}"
+        return f"{name}: {clean_text.strip()}"
+    
     async def add_message(
         self,
         user_id: int,
@@ -61,15 +108,26 @@ class MessageBatcher:
                 batch.timer = None
         else:
             # Create new batch
+            # owner_user_id is the user who forwards the dialogue (from_user.id of first message)
             batch = MessageBatch(
                 first_message_time=asyncio.get_event_loop().time(),
-                first_message=message
+                first_message=message,
+                owner_user_id=message.from_user.id if message.from_user else None
             )
             self._batches[user_id] = batch
         
-        # Add message content to batch
+        # Add message content to batch with sender name
         if text:
-            batch.messages.append(text)
+            sender_name = self._get_sender_name(message)
+            # Check if the sender is the calendar owner
+            sender_user_id = self._get_sender_user_id(message)
+            is_calendar_owner = (
+                batch.owner_user_id is not None
+                and sender_user_id is not None
+                and sender_user_id == batch.owner_user_id
+            )
+            formatted_message = self._format_message_text(sender_name, text, is_calendar_owner)
+            batch.messages.append(formatted_message)
         if image_path:
             batch.images.append(image_path)
         
@@ -336,8 +394,8 @@ class CalendarBot:
 
     async def _process_batched_messages(self, batch: MessageBatch, first_message: types.Message) -> None:
         """Process a batch of messages as a single unit"""
-        # Combine all message texts with separator
-        combined_text = "\n\n---\n\n".join(batch.messages) if batch.messages else None
+        # Combine all message texts - each message is already formatted as "Name: text"
+        combined_text = "\n".join(batch.messages) if batch.messages else None
         
         # Use first image if any, or None
         image_path = batch.images[0] if batch.images else None
