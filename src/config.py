@@ -6,16 +6,14 @@ from dotenv import load_dotenv
 def get_settings():
     load_dotenv()
 
-    # Legacy generic API key (for backward compatibility)
-    legacy_api_key = os.getenv("LLM_API_KEY")
 
     # Provider-specific API keys with fallback to legacy key
-    deepseek_api_key = os.getenv("DEEPSEEK_API_KEY") or legacy_api_key
-    groq_api_key = os.getenv("GROQ_API_KEY") or legacy_api_key
+    deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+    groq_api_key = os.getenv("GROQ_API_KEY")
 
     # Ensure at least one API key is available
     if not deepseek_api_key and not groq_api_key:
-        logger.error("At least one API key must be set: DEEPSEEK_API_KEY, GROQ_API_KEY, or LLM_API_KEY (legacy)")
+        logger.error("At least one API key must be set: DEEPSEEK_API_KEY, GROQ_API_KEY")
         os._exit(1)
 
     telegram_token = os.getenv("BOT_TOKEN")
@@ -28,7 +26,7 @@ def get_settings():
     model = os.getenv("MODEL", "openai/gpt-oss-120b")
 
     # Which LLM provider to use: "deepseek" (default), "groq", etc.
-    llm_provider = os.getenv("LLM_PROVIDER", "deepseek")
+    llm_provider = os.getenv("LLM_PROVIDER", "groq")
 
     # Get daily token limit from env or use default
     daily_token_limit = int(os.getenv("DAILY_TOKEN_LIMIT", "30000"))
