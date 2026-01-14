@@ -21,7 +21,7 @@ def get_settings():
         logger.error("BOT_TOKEN must be set")
         os._exit(1)
 
-    caldav_timezone = os.getenv("CALDAV_TIMEZONE", "Europe/Moscow")
+    timezone = os.getenv("TZ", "Europe/Moscow")
 
     model = os.getenv("MODEL", "openai/gpt-oss-120b")
 
@@ -41,7 +41,7 @@ def get_settings():
         "model": model,
         "telegram_token": telegram_token,
         "caldav": {
-            "timezone": caldav_timezone
+            "timezone": timezone
         },
         "daily_token_limit": daily_token_limit,
         "llm_provider": llm_provider,

@@ -109,7 +109,6 @@ services:
       # Provider selection:
       LLM_PROVIDER: groq                       # groq or deepseek
       MODEL: openai/gpt-oss-120b               # Optional
-      CALDAV_TIMEZONE: Europe/Moscow
       # Optional settings:
       # DAILY_TOKEN_LIMIT: 30000
       # MESSAGE_BATCH_TIMEOUT: 0.8
@@ -130,8 +129,7 @@ services:
      - `GROQ_API_KEY`: API key for Groq (https://console.groq.com/)
    - `LLM_PROVIDER`: Which provider to use - `groq` (default) or `deepseek`
    - `MODEL`: Model to use (default: `openai/gpt-oss-120b`)
-   - `TZ`: Bot timezone (default: `Europe/Moscow`)
-   - `CALDAV_TIMEZONE`: CalDAV server timezone (default: `Europe/Moscow`)
+   - `TZ`: Timezone for both the bot and CalDAV events (default: `Europe/Moscow`)
    - Optional settings:
      - `DAILY_TOKEN_LIMIT`: Daily token limit per user (default: `30000`)
      - `MESSAGE_BATCH_TIMEOUT`: Timeout for message batching in seconds (default: `0.8`)
