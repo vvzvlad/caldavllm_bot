@@ -103,8 +103,17 @@ services:
     environment:
       TZ: Europe/Moscow
       BOT_TOKEN: YOUR_TELEGRAM_BOT_TOKEN
-      LLM_API_KEY: YOUR_LLM_API_KEY
-      CALDAV_TIMEZONE: Europe/Moscow 
+      # At least one API key is required:
+      DEEPSEEK_API_KEY: YOUR_DEEPSEEK_API_KEY  # Optional
+      GROQ_API_KEY: YOUR_GROQ_API_KEY          # Optional
+      # Provider selection:
+      LLM_PROVIDER: groq                       # groq or deepseek
+      MODEL: openai/gpt-oss-120b               # Optional
+      CALDAV_TIMEZONE: Europe/Moscow
+      # Optional settings:
+      # DAILY_TOKEN_LIMIT: 30000
+      # MESSAGE_BATCH_TIMEOUT: 0.8
+      # MAX_BATCH_SIZE: 30
     logging:
       driver: "json-file"
       options:
@@ -116,9 +125,17 @@ services:
 
 2. Replace environment variables with your values:
    - `BOT_TOKEN`: Your Telegram bot token (get from [@BotFather](https://t.me/BotFather))
-   - `LLM_API_KEY`: API key for deepseek (need money on account)
-   - `TZ`: Bot timezone
-   - `CALDAV_TIMEZONE`: CalDAV server timezone
+   - LLM Provider API Keys (at least one required):
+     - `DEEPSEEK_API_KEY`: API key for DeepSeek (https://platform.deepseek.com/)
+     - `GROQ_API_KEY`: API key for Groq (https://console.groq.com/)
+   - `LLM_PROVIDER`: Which provider to use - `groq` (default) or `deepseek`
+   - `MODEL`: Model to use (default: `openai/gpt-oss-120b`)
+   - `TZ`: Bot timezone (default: `Europe/Moscow`)
+   - `CALDAV_TIMEZONE`: CalDAV server timezone (default: `Europe/Moscow`)
+   - Optional settings:
+     - `DAILY_TOKEN_LIMIT`: Daily token limit per user (default: `30000`)
+     - `MESSAGE_BATCH_TIMEOUT`: Timeout for message batching in seconds (default: `0.8`)
+     - `MAX_BATCH_SIZE`: Maximum messages in a batch (default: `30`)
 
 3. Start the container:
 ```bash
