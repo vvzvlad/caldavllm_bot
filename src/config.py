@@ -23,10 +23,23 @@ def get_settings():
 
     timezone = os.getenv("TZ", "Europe/Moscow")
 
-    model = os.getenv("MODEL", "openai/gpt-oss-120b")
-
     # Which LLM provider to use: "deepseek" (default), "groq", etc.
     llm_provider = os.getenv("LLM_PROVIDER", "groq")
+
+    default_models = {
+        "deepseek": "deepseek-reasoner",
+        "groq": "openai/gpt-oss-120b",
+    }
+
+    if llm_provider not in default_models:
+        logger.error(
+            "Unsupported LLM provider '%s'. Allowed providers: %s",
+            llm_provider,
+            ", ".join(sorted(default_models.keys())),
+        )
+        os._exit(1)
+
+    model = os.getenv("MODEL") or default_models[llm_provider]
 
     # Get daily token limit from env or use default
     daily_token_limit = int(os.getenv("DAILY_TOKEN_LIMIT", "30000"))

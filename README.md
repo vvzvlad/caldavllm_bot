@@ -104,12 +104,13 @@ services:
       TZ: Europe/Moscow
       BOT_TOKEN: YOUR_TELEGRAM_BOT_TOKEN
       # At least one API key is required:
-      DEEPSEEK_API_KEY: YOUR_DEEPSEEK_API_KEY  # Optional
-      GROQ_API_KEY: YOUR_GROQ_API_KEY          # Optional
+      DEEPSEEK_API_KEY: YOUR_DEEPSEEK_API_KEY  # Optional (if LLM_PROVIDER=groq)
+      GROQ_API_KEY: YOUR_GROQ_API_KEY          # Optional (if LLM_PROVIDER=deepseek)
       # Provider selection:
-      LLM_PROVIDER: groq                       # groq or deepseek
-      MODEL: openai/gpt-oss-120b               # Optional
+      LLM_PROVIDER: groq   
       # Optional settings:
+      # groq/deepseek
+      # MODEL: openai/gpt-oss-120b
       # DAILY_TOKEN_LIMIT: 30000
       # MESSAGE_BATCH_TIMEOUT: 0.8
       # MAX_BATCH_SIZE: 30
@@ -128,8 +129,8 @@ services:
      - `DEEPSEEK_API_KEY`: API key for DeepSeek (https://platform.deepseek.com/)
      - `GROQ_API_KEY`: API key for Groq (https://console.groq.com/)
    - `LLM_PROVIDER`: Which provider to use - `groq` (default) or `deepseek`
-   - `MODEL`: Model to use (default: `openai/gpt-oss-120b`)
-   - `TZ`: Timezone for both the bot and CalDAV events (default: `Europe/Moscow`)
+   - `MODEL`: Model to use (default: `openai/gpt-oss-120b` for groq, deepseek-reasoner` for deepseek))
+   - `TZ`: Timezone for CalDAV events (default: `Europe/Moscow`)
    - Optional settings:
      - `DAILY_TOKEN_LIMIT`: Daily token limit per user (default: `30000`)
      - `MESSAGE_BATCH_TIMEOUT`: Timeout for message batching in seconds (default: `0.8`)
