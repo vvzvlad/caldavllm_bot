@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import Callable, Awaitable
 from loguru import logger
 from aiogram import Bot, Dispatcher, types
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.filters import Command
 from .config import get_settings
 from .llm import get_llm
@@ -190,7 +192,11 @@ class MessageBatcher:
 class CalendarBot:
     def __init__(self):
         self.settings = get_settings()
-        self.bot = Bot(token=self.settings["telegram_token"])
+        api_server = self.settings.get("telegram_bot_api_server")
+        # Use custom Telegram Bot API server URL if provided (e.g., local Bot API Server instance)
+        # TelegramAPIServer is passed to AiohttpSession via 'api' parameter, not to Bot directly
+        server = TelegramAPIServer.from_base(api_server) if api_server else TelegramAPIServer.from_base("https://api.telegram.org")
+        self.bot = Bot(token=self.settings["telegram_token"], session=AiohttpSession(api=server))
         self.dp = Dispatcher()
         # LLM backend is selected via configuration in src.config / src.llm
         self.llm = get_llm()

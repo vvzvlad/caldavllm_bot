@@ -21,6 +21,8 @@ def get_settings():
         logger.error("BOT_TOKEN must be set")
         os._exit(1)
 
+    telegram_bot_api_server = os.getenv("TELEGRAM_BOT_API_SERVER")
+
     timezone = os.getenv("TZ", "Europe/Moscow")
 
     # Which LLM provider to use: "deepseek" (default), "groq", etc.
@@ -53,6 +55,7 @@ def get_settings():
         "groq_api_key": groq_api_key,
         "model": model,
         "telegram_token": telegram_token,
+        "telegram_bot_api_server": telegram_bot_api_server,
         "caldav": {
             "timezone": timezone
         },
