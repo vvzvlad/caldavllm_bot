@@ -109,7 +109,14 @@ class GroqLLM:
 
                 if response.status_code != 200:
                     logger.error("Groq API error %s in _make_request: %s", response.status_code, response.text)
-                    return None
+                    # Return a sentinel dict so the caller can distinguish an API-level error
+                    # from a network/timeout failure (which returns None)
+                    try:
+                        error_body = response.json()
+                        error_detail = error_body.get("error", {}).get("message", response.text)
+                    except Exception:
+                        error_detail = response.text
+                    return {"_error": True, "_error_detail": error_detail}
 
                 response_json = response.json()
                 try:
@@ -340,21 +347,21 @@ Current date and time: {current_datetime}
 
 
 Return ONLY the JSON object without any additional text or explanation. Use null for missing fields.
-Example response format:
+Example response format (end_time defaults to start_time + 1 hour if not specified; description is blank if no specific info; location uses nominative case):
 {{
-    "title": "//название события//",
+    "title": "название события",
     "start_time": "2024-03-22T15:00:00",
-    "end_time": "2024-03-22T16:00:00",  # If not specified, set to start_time + 1 hour
-    "description": "//описание события//",  # blank if no specific description
-    "location": "//место события//",  # Use nominative case
+    "end_time": "2024-03-22T16:00:00",
+    "description": "описание события",
+    "location": "место события",
     "result": true,
     "comment": null
 }}
 
-Example of failed parsing (if there is not enough information, e.g. only month without day):
+Example of failed parsing (if there is not enough information, e.g. only month without day; comment should explain why parsing failed):
 {{
     "result": false,
-    "comment": "Недостаточно информации о дате" #Описание того, почему не удалось распознать событие
+    "comment": "Недостаточно информации о дате"
 }}
 """
 
@@ -372,11 +379,21 @@ Example of failed parsing (if there is not enough information, e.g. only month w
 
             logger.info("[%s] Groq API request completed in %.2f seconds", request_id, api_duration)
 
-            if not response:
-                logger.error("[%s] Groq API request failed in parse_calendar_event", request_id)
+            if response is None:
+                # Network-level failure: timeout or connection error
+                logger.error("[%s] Groq API request failed (timeout/network) in parse_calendar_event", request_id)
                 return {
                     "result": False,
                     "comment": "LLM API error: request timeout or service unavailable"
+                }
+
+            if isinstance(response, dict) and response.get("_error"):
+                # API returned a non-200 HTTP status; surface the actual error detail
+                error_detail = response.get("_error_detail", "unknown API error")
+                logger.error("[%s] Groq API returned error in parse_calendar_event: %s", request_id, error_detail)
+                return {
+                    "result": False,
+                    "comment": f"LLM API error: {error_detail}"
                 }
 
             content = response["choices"][0]["message"]["content"]
