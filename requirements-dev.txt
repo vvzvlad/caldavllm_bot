@@ -1,0 +1,16 @@
+# Dev/test dependencies — never installed into the runtime image.
+# Install with:  pip install -r requirements-dev.txt
+#
+# These used to live in requirements.txt, which meant pytest and pytest-asyncio were baked into
+# every production image for no reason at all. They are separated here for the same reason the
+# image copies named paths instead of the whole tree: what ships should be what runs.
+#
+# NOTE ON CI: nothing in CI installs this file. tests/test_llm.py drives a LIVE, PAID LLM API and
+# asserts on the quality of its answers, so it cannot run unattended — the reasoning is written
+# out at the top of both workflows in .gitea/workflows/. This file exists so that the suite can
+# still be run BY HAND, deliberately, with an API_KEY in the environment and somebody watching
+# the bill.
+-r requirements.txt
+
+pytest==9.0.3
+pytest-asyncio==1.3.0

@@ -1,0 +1,53 @@
+# Build-context exclusions.
+#
+# Today's Dockerfile copies named globs — `COPY *.py .` and `COPY src/*.py src/` — so none of the
+# paths below could reach the runtime image anyway. This file is still worth having for two
+# separate reasons:
+#
+#   * everything not listed here is packed up and shipped to the docker daemon as build context on
+#     every single build, including `.git` and whatever a developer happens to have under data/;
+#   * the day somebody replaces those globs with a `COPY . .` — the single most common Dockerfile
+#     edit there is — this file is the only thing standing between the repo's working tree and a
+#     published image. Two of the entries below would be actively harmful in that image, and both
+#     are called out where they appear.
+
+.git
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.py[cod]
+
+# NOT merely noise. `get_settings()` calls `load_dotenv()`, which reads a `.env` from the working
+# directory — so a `.env` baked into the image would silently supply BOT_TOKEN and the LLM keys to
+# every container started from it. That is a developer's own credentials shipped inside a published
+# image, and it also disables the startup guard: the container would come up "fine" while pointed
+# at the wrong bot. The smoke gate would catch it (its three no-environment runs would stop exiting
+# non-zero), but it must not get that far.
+.env
+
+# Other people's CalDAV passwords. src/users.py stores each user's calendar credentials as
+# PLAINTEXT JSON in data/user_<id>.json; in production that directory is a mounted volume, and on a
+# developer's machine it is whatever was left there by a local run. This repository is public and
+# its images are published, so this line is the one that keeps a local test account's calendar
+# password out of a public image layer.
+data/
+
+# Tests never run in the image, and one of them (tests/test_llm.py) drives a live, paid LLM API —
+# see the note at the top of both workflows in .gitea/workflows/.
+tests/
+requirements-dev.txt
+
+# CI belongs to the repository, not to the artifact. `.github/` stays listed although its workflow
+# has been removed: a mirror or a lint workflow reappearing there should not become a build input.
+.github/
+.gitea/
+ci/
+
+*.md
+LICENSE
+docker-compose.yml
+.DS_Store
+.vscode/
+*.code-workspace
+pyrightconfig.json

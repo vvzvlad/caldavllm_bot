@@ -1,8 +1,26 @@
-aiogram
-python-dotenv
-loguru
-caldav
-pytz
-httpx
-pytest
-pytest-asyncio
+# Runtime dependencies of the bot. Nothing here is needed to develop or test it — see
+# requirements-dev.txt for that, which pulls this file in and adds pytest on top. The split is
+# what lets the image stay free of a test runner: the Dockerfile installs THIS file, and
+# .dockerignore keeps requirements-dev.txt and tests/ out of the build context entirely.
+#
+# Every version below was taken from `pip freeze` inside the RUNNING production container, and
+# that is the whole point of pinning them. The purpose is NOT to pick good versions — it is to
+# write down the exact set that is already proven in production, so that the next `docker build`
+# produces the image that is running today rather than whatever the index resolves to that
+# morning. Before these pins, every rebuild silently re-resolved all six, so an aiogram or a
+# caldav release could change what the bot does without a single line of this repo changing.
+#
+# Upgrading is therefore a deliberate, separate act: bump one line, let CI build it, and let the
+# smoke gate in .gitea/workflows/ decide — it imports every src/ module inside the built image
+# and checks the third-party symbols the code actually calls, which is exactly the class of
+# breakage an unpinned major bump produces.
+
+aiogram==3.27.0
+caldav==3.1.0
+httpx==0.28.1
+loguru==0.7.3
+python-dotenv==1.2.2
+# Nothing under src/ imports pytz — it is here because production carries it, and this file is a
+# record of what production carries. Dropping it would be a change to a proven set rather than a
+# transcription of one, so it stays; retiring it is its own small change, with its own build.
+pytz==2026.1.post1
