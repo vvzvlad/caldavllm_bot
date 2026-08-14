@@ -27,13 +27,18 @@ name: Docker Image CI
 #
 # THERE IS NO TEST JOB HERE, and its absence is a decision rather than an omission. The one test
 # module in this repository, tests/test_llm.py, has an autouse fixture that fails the run unless
-# API_KEY is set, and every test in it then calls the real `parse_calendar_event()` — a live,
-# billed request to an LLM — and asserts on the CONTENT of the answer ("серге" in the title, this
+# API_KEY is set, and 40 of its 42 tests then call the real `parse_calendar_event()` — a live,
+# billed request to an LLM — and assert on the CONTENT of the answer ("серге" in the title, this
 # exact ISO timestamp). It is a quality harness for prompt work, run by hand when the prompt
 # changes. Wired into CI it would spend money on every push, and go red whenever a model felt
 # differently about a sentence, which is the fastest known way to teach a team to ignore a red
-# build. The entire load therefore sits on the smoke gate below, which is hermetic, free, and
-# tests the artefact rather than the prompt.
+# build.
+# To be exact rather than convenient about it: two of the 42 — test_datetime_mock and
+# test_generate_calendar — are fully hermetic and would be perfectly safe to run. They are still
+# not run, because the autouse fixture fails them without API_KEY anyway, and because a job that
+# exists to execute two tests out of a module of 42 advertises a coverage that is not there. The
+# entire load therefore sits on the smoke gate below, which is hermetic, free, and tests the
+# artefact rather than the prompt.
 #
 # The old file also triggered on `master`. This repository's default branch is now `main`, and a
 # `branches:` filter naming a branch that does not exist fails silently — the trigger simply stops
@@ -52,10 +57,16 @@ permissions:
 # Two pushes to the same branch in a row must not race: the runs are independent and the older one
 # may finish last, leaving ITS :latest on the registry — the next poll by the updater would then
 # ship the previous commit.
-# The group alone already fixes that: runs are serialised, so the newest commit's :latest is
-# written last. Cancelling is deliberately OFF — it would kill the older run together with its
-# :<sha> image, and on two quick pushes the intermediate commit would never be built, leaving holes
-# in the tag history exactly where a rollback is most likely to be needed.
+# The group alone fixes that: runs are serialised, so the newest commit's :latest is written last.
+# Cancelling is deliberately OFF because it would kill the RUNNING older run together with its
+# :<sha> image — the immutable rollback point for the commit it was built from.
+# It does NOT guarantee a hole-free :<sha> history, and should not be read as though it did: only
+# one run per group waits at a time, so on three or more pushes in quick succession the PENDING run
+# is superseded before it ever starts and that commit is never built at all. What this setting buys
+# is narrower than "every commit gets a tag": a run that has already begun is allowed to finish and
+# publish its immutable tag. A guaranteed tag per commit would need a per-SHA group, which would
+# give up the serialisation that keeps :latest ordered — and ordering is the more valuable of the
+# two, because a stale :latest is what actually reaches production.
 concurrency:
   group: image-${{ github.ref }}
   cancel-in-progress: false
@@ -66,8 +77,9 @@ jobs:
     # advertises it and serves every repository on the instance. Writing the runner's own name here
     # would leave the job queued forever, because no runner offers a label by that name.
     runs-on: ubuntu-latest
-    # The three step-level timeouts below come to 51 minutes (20 build + 16 smoke + 15 push); 60
-    # leaves 9 on top for checkout, the registry login and the two cleanup steps. The outer bound
+    # The three step-level timeouts below come to 53 minutes (20 build + 18 smoke + 15 push); 60
+    # leaves 7 on top for checkout, the registry login, the two cleanup steps and the logout. The
+    # outer bound
     # has to EXCEED the sum, not equal it: act_runner kills the whole job when this fires, and a
     # step marked `if: always()` is not guaranteed to run afterwards — so a job that dies mid-push
     # leaves the smoke containers and a few hundred MB of image sitting on the daemon the entire
@@ -214,13 +226,13 @@ jobs:
       # left behind is removable by name.
       #
       # Step-level `timeout-minutes`, the one act_runner is known to enforce (the job-level one is
-      # only the outer bound). 16 minutes is set against ci/smoke.py's OWN worst case, which the
-      # script documents and sums from its individual bounds: 855 s — a little over 14 minutes — if
-      # every docker call it makes runs out its budget, the probe included. In practice the whole
-      # gate is well under a minute. Being killed BY this timeout is what the margin is for: the
-      # script's own container cleanup would not run, and the `if: always()` step below is what
-      # catches that.
-      timeout-minutes: 16
+      # only the outer bound). 18 minutes is set against ci/smoke.py's OWN worst case, which the
+      # script documents and sums from its individual bounds: 945 s — a little under 16 minutes —
+      # if every docker call it makes runs out its budget, the probe and the five-container
+      # `finally` included. In practice the whole gate is well under a minute. Being killed BY this
+      # timeout is what the margin is for: the script's own container cleanup would not run, and
+      # the `if: always()` step below is what catches that.
+      timeout-minutes: 18
       env:
         # SMOKE_NAME is not here: it is set once at job level, so this step and the cleanup step
         # below are guaranteed to be talking about the same containers.
@@ -319,20 +331,42 @@ jobs:
       # publishes a new python:3.11-slim digest. Both need a separate periodic cleanup on the runner
       # host.
       # `always()` so the cleanup runs even when the smoke or the push above fails.
+      # Note the deliberate asymmetry with the push step above, which the shared body below cannot
+      # state because it is byte-identical to its twin in tests.yml, where no push step exists:
+      # THERE an empty $TAGS is rejected, because publishing nothing while reporting success is a
+      # silent deploy failure. HERE it is accepted, because removing nothing when there is nothing
+      # to remove is the correct outcome. Do not "fix" either one to match the other.
       if: always()
       env:
         # Same reasoning as in the build step: pass the tags through the environment, and leave
         # `$TAGS` unquoted so it word-splits into items.
         TAGS: ${{ steps.tags.outputs.tags }}
       run: |
-        # An empty $TAGS is legitimate HERE, unlike in the push step of image-check-publish.yml, and
-        # is deliberately not rejected. It can arise two ways, and neither leaves a tag for this
-        # loop to remove. If `Compute image tags` FAILED, the build step never ran and nothing was
-        # created at all. If it succeeded but wrote no output, the build ran without any `--tag`, so
-        # the image it produced is untagged: dangling, unreachable by name, and reclaimable only by
-        # the periodic prune on the runner host, never by this loop — and that run still goes red,
-        # because the smoke step gets an empty SMOKE_IMAGE and ci/smoke.py refuses to start.
-        # Do not "fix" this symmetrically with the guard in that push step: there, publishing
-        # nothing while reporting success is a silent deploy failure; here, removing nothing when
-        # there is nothing to remove is the correct outcome.
+        # An empty $TAGS is legitimate HERE and is deliberately not rejected — the step-level
+        # comment above says what it is being contrasted with, which is where a file-specific
+        # remark belongs; this body is shared verbatim between the two workflows and cannot name
+        # either of them without being wrong in one.
+        # It can arise two ways, and neither leaves a tag for this loop to remove. If `Compute
+        # image tags` FAILED, the build step never ran and nothing was created at all. If it
+        # succeeded but wrote no output, the build ran without any `--tag`, so the image it
+        # produced is untagged: dangling, unreachable by name, and reclaimable only by the periodic
+        # prune on the runner host, never by this loop — and that run still goes red, because the
+        # smoke step gets an empty SMOKE_IMAGE and ci/smoke.py refuses to start.
         for tag in $TAGS; do docker rmi "$tag" || true; done
+
+    - name: Log out of the Gitea container registry
+      # The counterpart to the login above, and the reason it exists is the same reason the login
+      # is placed as late as it is: this runner is self-hosted and shared with every other
+      # repository on the instance, and `docker login` writes the credential into a docker config
+      # that outlives this job. A run that ended anywhere after the login — a failed push, a
+      # cancelled run, a job killed by its own timeout — would leave a working registry credential
+      # sitting there for whatever executes next.
+      # `always()`, and last, so it also covers the runs that failed before ever reaching the push.
+      # tests.yml has no counterpart step because it never logs in: there is no credential in that
+      # job to leave behind.
+      if: always()
+      run: |
+        # `|| true` because this step also runs on the paths where the login never happened — a red
+        # smoke, a failed build — and `docker logout` against a registry that was never logged in
+        # to should not turn a diagnosable failure above into a confusing one down here.
+        docker logout gitea.vvzvlad.xyz || true

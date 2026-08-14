@@ -14,13 +14,17 @@ name: Tests
 #
 # NOTE THE NAME: this workflow is called Tests and runs no pytest, which is intentional and is
 # stated here so the gap is not mistaken for a bug. tests/test_llm.py — the only test module in the
-# repository — has an autouse fixture that fails without API_KEY in the environment, and each test
-# then calls the real `parse_calendar_event()` against a live LLM and asserts on the CONTENT of the
-# reply. It is a paid, non-deterministic quality harness for prompt work: run it by hand when the
-# prompt changes, with somebody watching the bill. Wired into a PR gate it would charge money for
-# every push and go red whenever a model felt differently about a sentence, and a gate that is red
-# for reasons nobody can act on is a gate people learn to click past. What this workflow runs
-# instead is the smoke gate — hermetic, free, and aimed at the artefact rather than at the prompt.
+# repository — has an autouse fixture that fails without API_KEY in the environment, and 40 of its
+# 42 tests then call the real `parse_calendar_event()` against a live LLM and assert on the CONTENT
+# of the reply. It is a paid, non-deterministic quality harness for prompt work: run it by hand
+# when the prompt changes, with somebody watching the bill. Wired into a PR gate it would charge
+# money for every push and go red whenever a model felt differently about a sentence, and a gate
+# that is red for reasons nobody can act on is a gate people learn to click past.
+# The exact version: two of the 42 — test_datetime_mock and test_generate_calendar — are fully
+# hermetic. They are still not run, because the autouse fixture fails them without API_KEY anyway,
+# and a job that executes two tests out of 42 advertises a coverage that does not exist. What this
+# workflow runs instead is the smoke gate — hermetic, free, and aimed at the artefact rather than
+# at the prompt.
 on:
   # Manual re-run: without it a run that flaked on runner networking could only be retried by
   # pushing an empty commit to the PR branch. Safe to expose here — this workflow touches no
@@ -64,8 +68,8 @@ jobs:
     runs-on: ubuntu-latest
     # Deliberately the same outer bound as image-check-publish.yml, so the two gates cannot drift
     # apart on a number that is easy to change in one file and forget in the other. It is only ever
-    # an outer bound: this job has no push step, so its step-level timeouts (20 build + 16 smoke =
-    # 36 minutes) are the ones act_runner actually enforces, and 60 leaves the rest for checkout and
+    # an outer bound: this job has no push step, so its step-level timeouts (20 build + 18 smoke =
+    # 38 minutes) are the ones act_runner actually enforces, and 60 leaves the rest for checkout and
     # the two cleanup steps. It must stay above their sum: a job killed by this timeout may never
     # run its `if: always()` cleanup, leaving containers and a few hundred MB of image on the docker
     # daemon shared by the whole fleet.
@@ -155,11 +159,11 @@ jobs:
       # no real token exists and none should.
       #
       # Step-level `timeout-minutes`, the one act_runner is known to enforce (the job-level one is
-      # only the outer bound). Same 16 minutes as in image-check-publish.yml, for the same
-      # arithmetic: ci/smoke.py's own documented worst case is 855 s if every docker call it makes
-      # runs out its budget, the probe included, and in practice the whole gate is well under a
-      # minute.
-      timeout-minutes: 16
+      # only the outer bound). Same 18 minutes as in image-check-publish.yml, for the same
+      # arithmetic: ci/smoke.py's own documented worst case is 945 s if every docker call it makes
+      # runs out its budget, the probe and the five-container `finally` included, and in practice
+      # the whole gate is well under a minute.
+      timeout-minutes: 18
       env:
         # SMOKE_NAME is not here: it is set once at job level, so this step and the cleanup step
         # below are guaranteed to be talking about the same containers.
@@ -205,20 +209,25 @@ jobs:
       # This gate runs on every push to a PR, so it produces MORE of that garbage than the
       # publishing workflow does — see the full note in image-check-publish.yml.
       # `always()` so a failed smoke still cleans up after itself.
+      # The shared body below accepts an empty $TAGS. That is the deliberate opposite of the push
+      # step in image-check-publish.yml, which rejects one: publishing nothing while reporting
+      # success is a silent deploy failure, whereas removing nothing when there is nothing to
+      # remove is simply correct. The body cannot say so itself — it is byte-identical to its twin
+      # over there, and this file has no push step to point at.
       if: always()
       env:
         # Same reasoning as in the build step: pass the tags through the environment, and leave
         # `$TAGS` unquoted so it word-splits into items.
         TAGS: ${{ steps.tags.outputs.tags }}
       run: |
-        # An empty $TAGS is legitimate HERE, unlike in the push step of image-check-publish.yml, and
-        # is deliberately not rejected. It can arise two ways, and neither leaves a tag for this
-        # loop to remove. If `Compute image tags` FAILED, the build step never ran and nothing was
-        # created at all. If it succeeded but wrote no output, the build ran without any `--tag`, so
-        # the image it produced is untagged: dangling, unreachable by name, and reclaimable only by
-        # the periodic prune on the runner host, never by this loop — and that run still goes red,
-        # because the smoke step gets an empty SMOKE_IMAGE and ci/smoke.py refuses to start.
-        # Do not "fix" this symmetrically with the guard in that push step: there, publishing
-        # nothing while reporting success is a silent deploy failure; here, removing nothing when
-        # there is nothing to remove is the correct outcome.
+        # An empty $TAGS is legitimate HERE and is deliberately not rejected — the step-level
+        # comment above says what it is being contrasted with, which is where a file-specific
+        # remark belongs; this body is shared verbatim between the two workflows and cannot name
+        # either of them without being wrong in one.
+        # It can arise two ways, and neither leaves a tag for this loop to remove. If `Compute
+        # image tags` FAILED, the build step never ran and nothing was created at all. If it
+        # succeeded but wrote no output, the build ran without any `--tag`, so the image it
+        # produced is untagged: dangling, unreachable by name, and reclaimable only by the periodic
+        # prune on the runner host, never by this loop — and that run still goes red, because the
+        # smoke step gets an empty SMOKE_IMAGE and ci/smoke.py refuses to start.
         for tag in $TAGS; do docker rmi "$tag" || true; done

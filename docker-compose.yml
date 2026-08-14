@@ -9,6 +9,11 @@
 # This is a long-polling Telegram bot. It opens no listening socket, so there is nothing to route
 # and nothing to health-check over HTTP — no reverse-proxy labels, no `ports:`, no `healthcheck:`.
 #
+# THIS FILE IS A RECORD OF WHAT RUNS, not a template for a fresh install. The volume below is
+# declared `external`, so `docker compose up` from this file expects that volume to already exist
+# and fails loudly if it does not. README.md carries a self-contained compose block for anybody
+# deploying their own copy; that one creates its own volume and is the right starting point.
+#
 # Every value below is a PLACEHOLDER (XXX) or a non-secret default. Real tokens, keys and addresses
 # live only in the deployment's own environment and are never committed here — this repository is
 # public and mirrored.
@@ -22,26 +27,43 @@
 #    it is worth deleting from the deployment too, so nobody edits it expecting an effect. Both
 #    names currently hold the same value there, so removing it changes nothing.
 #
-# 2. The deployed container's restart policy is `unless-stopped`, not the `always` written below.
-#    The difference is real and shows up exactly once, in the worst moment: `unless-stopped` leaves
-#    a container an operator stopped by hand stopped across a daemon restart, `always` brings it
-#    back. `always` is the fleet convention and is what this file records; if the deployment is
-#    meant to keep `unless-stopped`, change this line rather than letting the two drift.
+# 2. `restart: unless-stopped` below is what the container actually runs, and it differs from the
+#    `always` used elsewhere in this fleet. The difference shows up exactly once, in the worst
+#    moment: `unless-stopped` leaves a container that an operator stopped by hand stopped across a
+#    daemon restart, `always` brings it back. Recorded as deployed rather than normalised to the
+#    convention, because this file's job is to say what is running; changing the policy is a
+#    deliberate act for the deployment, not a side effect of writing it down.
+
+# The compose project name, and it is load-bearing rather than decorative — see the volume note
+# below. It is recorded here because a deploy record that omits it is not a record: the project
+# name is what turns every short name in this file into the real object on the host.
+# Be aware of its precedence, though: a top-level `name:` is the LOWEST-priority source there is.
+# `-p`, COMPOSE_PROJECT_NAME and Portainer (which names the project after the stack) all override
+# it. So it documents the intent; it does not enforce it. The enforcement is in the volume.
+name: telegram_bots
 
 volumes:
   # One JSON file per user, holding that user's CalDAV username and password in PLAIN TEXT — this
   # volume is other people's calendar credentials, and losing it means every user has to run
   # /caldav again with a fresh app password.
-  # The name matters and must not be "tidied": docker composes it with the stack name to form the
-  # real volume, so renaming this key points the service at a NEW, EMPTY volume while the old one
-  # sits there full of credentials and unreferenced.
+  #
+  # Declared `external` with its FULL real name, and that is the whole point of this block. Docker
+  # composes a short volume name with the project name to form the real one, so a stack deployed
+  # under any name other than the one above would resolve `caldavllm_bot` to a NEW, EMPTY volume
+  # while the real one sat there untouched and unreferenced. Nothing would fail: the bot would come
+  # up perfectly healthy and simply ask every user to configure their calendar again — the quietest
+  # possible way to lose the only state this service has.
+  # Naming it absolutely removes the dependency on the project name entirely, and converts that
+  # silent data loss into a loud "external volume not found" before the container ever starts.
   caldavllm_bot:
+    external: true
+    name: telegram_bots_caldavllm_bot
 
 services:
   caldavllm_bot:
     image: gitea.vvzvlad.xyz/projects/caldavllm_bot:latest
     container_name: caldavllm_bot
-    restart: always
+    restart: unless-stopped
     volumes:
       # Must stay /app/data: src/users.py resolves its store from the RELATIVE path "data" against
       # the image's WORKDIR (/app). A different mount point does not fail — it silently leaves the

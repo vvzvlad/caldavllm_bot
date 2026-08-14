@@ -3,17 +3,34 @@
 # what lets the image stay free of a test runner: the Dockerfile installs THIS file, and
 # .dockerignore keeps requirements-dev.txt and tests/ out of the build context entirely.
 #
-# Every version below was taken from `pip freeze` inside the RUNNING production container, and
-# that is the whole point of pinning them. The purpose is NOT to pick good versions — it is to
-# write down the exact set that is already proven in production, so that the next `docker build`
-# produces the image that is running today rather than whatever the index resolves to that
-# morning. Before these pins, every rebuild silently re-resolved all six, so an aiogram or a
-# caldav release could change what the bot does without a single line of this repo changing.
+# Every version below was taken from `pip freeze` inside the RUNNING production container. The
+# purpose is NOT to pick good versions — it is to write down the set already proven in production,
+# so that a rebuild does not silently re-resolve the six libraries this code imports directly.
+# Before these pins, an aiogram or a caldav release could change what the bot does without a single
+# line of this repo changing.
 #
-# Upgrading is therefore a deliberate, separate act: bump one line, let CI build it, and let the
-# smoke gate in .gitea/workflows/ decide — it imports every src/ module inside the built image
-# and checks the third-party symbols the code actually calls, which is exactly the class of
-# breakage an unpinned major bump produces.
+# BE PRECISE ABOUT WHAT THAT BUYS, because the gap between the two readings is large and this file
+# used to claim the larger one. These are DIRECT dependencies only. A clean install of this file
+# pulls roughly 42 distributions; six are pinned here and the rest — pydantic, pydantic-core,
+# aiohttp, lxml, icalendar, recurring-ical-events, niquests and the remainder of the aiogram and
+# caldav trees — are resolved afresh on every build. So the class of surprise this file closes is
+# "aiogram renamed a symbol we call"; the class it leaves open is "icalendar changed how it
+# serialises a VEVENT" or "aiohttp changed a default timeout" — a transitive behavioural drift with
+# no import error to trip over. The smoke gate in .gitea/workflows/ catches the half of that which
+# breaks imports or construction, and it is hermetic and creates no calendar events, so it cannot
+# catch the other half. Two builds of the same commit are therefore NOT guaranteed to behave
+# identically; they are only guaranteed to agree about these six.
+#
+# Closing the rest means a real lockfile: `pip install --no-deps` against a complete `pip freeze`
+# of all ~42, or a tool that maintains one. That is the obvious next step and it is deliberately
+# left as a decision rather than smuggled in here — it is a different trade, in which every
+# transitive security fix becomes a manual bump and `--no-deps` stops pip from reporting a
+# violated constraint.
+#
+# Upgrading any of these is therefore a deliberate, separate act: bump one line, let CI build it,
+# and let the smoke gate decide — it imports every src/ module inside the built image and checks
+# the third-party symbols the code actually calls, which is exactly the class of breakage a major
+# bump produces.
 
 aiogram==3.27.0
 caldav==3.1.0

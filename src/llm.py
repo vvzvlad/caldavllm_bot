@@ -33,8 +33,15 @@ def _create_provider_from_settings() -> LLMProvider:
 
     # Fallback/default
     if provider_name != "deepseek":
+        # This branch is unreachable today: get_settings() validates llm_provider against the same
+        # table and calls os._exit(1) on anything outside it, so a name that got this far has
+        # already been accepted upstream. It is fixed rather than removed because it is the
+        # fallback for a caller that builds the settings dict by hand.
+        # Brace placeholders, not %s — loguru formats with str.format(*args) and would otherwise
+        # print the placeholder verbatim. (src/llm_groq.py and src/llm_deepseek.py use stdlib
+        # `logging`, where %-style is the correct form.)
         logger.warning(
-            "Unknown LLM provider '%s', falling back to 'deepseek'",
+            "Unknown LLM provider '{}', falling back to 'deepseek'",
             provider_name,
         )
     logger.info("Initializing LLM provider: deepseek")

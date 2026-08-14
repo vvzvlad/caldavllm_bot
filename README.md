@@ -89,13 +89,20 @@ The bot will parse your message and add the event to your calendar.
 
 1. Create a `docker-compose.yml` file:
 
+> **Note on the image.** Prebuilt images are published to `gitea.vvzvlad.xyz/projects/caldavllm_bot`
+> by the workflow in `.gitea/workflows/`, which builds the image, runs a smoke gate against it and
+> only then pushes `:latest` and `:<commit-sha>`. The old `ghcr.io/vvzvlad/caldavllm_bot` path is
+> **no longer updated** — the GitHub Actions workflow that published it has been removed, so that
+> tag is frozen at its final pre-migration build. Pull from the address below, or build the image
+> yourself with `docker build -t caldavllm_bot .` and point `image:` at that.
+
 ```yaml
 volumes:
   caldavllm_bot:
   
 services:
   caldavllm_bot:
-    image: ghcr.io/vvzvlad/caldavllm_bot:latest
+    image: gitea.vvzvlad.xyz/projects/caldavllm_bot:latest
     container_name: caldavllm_bot
     restart: unless-stopped
     volumes:

@@ -144,17 +144,15 @@ EXPECTED_ENV = "PYTHONUNBUFFERED=1"
 # container. Note the progression: case 2 satisfies the API-key branch so it can reach the token
 # branch, and case 3 satisfies both so it can reach the provider branch.
 #
-# On case 3's fragment, and it is worth reading before "improving" it: src/config.py writes that
-# message as
-#     logger.error("Unsupported LLM provider '%s'. Allowed providers: %s", llm_provider, ...)
-# which is stdlib-logging style. loguru does not do %-interpolation — it formats with
-# `str.format(*args)` — and the message contains no `{}`, so the arguments are silently dropped and
-# the operator sees a literal `'%s'` where the rejected value should be. That is a real (small)
-# bug in config.py, not in this gate, which is why the fragment matched below is only the fixed
-# prefix. When config.py is fixed to name the value, tighten this entry to require the value
-# itself: an operator staring at `Unsupported LLM provider '%s'` learns that SOMETHING is wrong
-# with LLM_PROVIDER but not what was rejected, which on a stack with several similar variables is
-# most of the diagnosis.
+# Case 3's fragment includes the REJECTED VALUE, and that is the interesting part of it. The
+# message used to be written stdlib-logging style — `logger.error("...'%s'...", llm_provider, ...)`
+# — while loguru formats with `str.format(*args)` and does no %-interpolation, so the arguments
+# were silently dropped and an operator saw a literal `Unsupported LLM provider '%s'`: enough to
+# know SOMETHING about LLM_PROVIDER was wrong, not enough to know what was rejected, which on a
+# stack carrying several similar variables is most of the diagnosis. src/config.py now uses brace
+# placeholders, and matching on `'nonsense'` here is what keeps it that way — a fragment of only
+# the fixed prefix would go on passing if the interpolation broke again, proving the branch fired
+# but not that its message is of any use.
 GUARD_CASES = [
     {
         "suffix": "-noenv",
@@ -185,7 +183,7 @@ GUARD_CASES = [
             "GROQ_API_KEY=smoke-not-a-real-key",
             "LLM_PROVIDER=nonsense",
         ],
-        "fragment": "Unsupported LLM provider",
+        "fragment": "Unsupported LLM provider 'nonsense'",
         "branch": (
             "the provider branch, the last of the three and the only one that can be reached with "
             "every required variable present. Without it a typo in LLM_PROVIDER would be caught "
@@ -230,18 +228,24 @@ SMOKE_ENV = [
 # is removed in a `finally` regardless, and the workflow removes it again under `if: always()`.
 IDLE_COMMAND = ["python", "-c", "import time; time.sleep(900)"]
 
-# The first line the bot logs, from `CalendarBot.start()`. Everything that can go wrong with the
-# IMAGE happens before it: main.py constructs `CalendarBot()` first, and that constructor runs
-# `get_settings()` (the guard), builds the aiogram Bot (token validation), builds the LLM provider,
-# the CalendarManager and the UserManager (which creates data/ under the real WORKDIR), and
-# registers all eight handlers. So the marker is a receipt for the whole of startup — and the
-# absence of it is the only signal check (g) needs.
+# The first line the bot logs, from `CalendarBot.start()`. It is a receipt for CONSTRUCTION, and
+# for construction only — that is the precise claim, and the imprecise version of it left a real
+# hole in this gate for a while, so it is worth being exact. main.py builds `CalendarBot()` before
+# start() runs, and that constructor is where `get_settings()` (the guard), the aiogram Bot (token
+# validation), the LLM provider, the CalendarManager, the UserManager (which creates data/ under
+# the real WORKDIR) and all eight handler registrations happen. All of that is proven by this line
+# appearing.
 #
-# It is also the LAST thing this gate can assert on, which is worth stating so nobody adds more:
-# `start()` continues straight into `_advertise_commands()` -> `bot.set_my_commands(...)`, which is
-# a REQUEST to Telegram. Against 127.0.0.1:1 that is refused instantly and the process dies with a
-# traceback. That traceback is EXPECTED, and check (g) is careful to look for tracebacks only in
-# the part of the log BEFORE this marker.
+# What it does NOT cover is the rest of start(). `_advertise_commands()` runs immediately after,
+# and it constructs five `types.BotCommand` objects BEFORE it makes any request — so an aiogram
+# bump that changed that class would raise past this marker, in the stretch of the log check (g)
+# deliberately does not read (see its docstring). That residue is covered in the hermetic probe
+# instead, by EXPECTED_BOT_COMMANDS, which builds the same five objects.
+#
+# This is still the LAST thing check (g) can assert on, and that is worth stating so nobody adds
+# more: `_advertise_commands()` ends in `bot.set_my_commands(...)`, a REQUEST to Telegram. Against
+# 127.0.0.1:1 it is refused instantly and the process dies with a traceback. That traceback is
+# EXPECTED, which is exactly why the split exists.
 STARTUP_MARKER = "Starting bot..."
 
 # Printed by the probe on its last line and nowhere else. DECLARED TWICE — here and again inside
@@ -251,6 +255,14 @@ STARTUP_MARKER = "Starting bot..."
 # block into a container by hand and have it work is most of why it is a plain string. A drift
 # costs a false RED (the outer half reports a probe that never finished), never a false green.
 PROBE_MARKER = "caldavllm_bot smoke probe ok"
+
+# How many verdicts the probe is expected to produce. Pinned rather than merely counted, because
+# the marker alone is a substring match: a probe whose checks silently stopped emitting rows — a
+# loop over a list that became empty, a check that started returning `[]` instead of a row — would
+# still print the marker, still exit 0, and still look like a full pass. Requiring the exact
+# `N/N` turns "fewer things were checked" into a red build. Adding a check is supposed to fail this
+# once, loudly, and be answered by updating this number.
+EXPECTED_PROBE_TARGETS = 44
 
 # The prefix put in front of every row the probe reported, so the merged report says where each
 # verdict was decided. Without it a reader of thirty result lines cannot tell which of them were
@@ -270,8 +282,11 @@ PROBE_ROW_PREFIX = "[in-container] "
 #   + 30 (inspect probe state)
 #   + 30 (rm cmd)       + 60 (cmd run -d)    + 45 (startup poll: 30 budget + one 15 s `logs`)
 #   + 30 (inspect cmd state)
-#   + 30 (rm cmd, finally) + 30 (rm probe, finally)
-#   = 855 s, a little over 14 minutes. Both workflows allow 16.
+#   + 150 (the `finally`: 30 cmd + 3 x 30 guards + 30 probe)
+#   = 945 s, a little under 16 minutes. Both workflows allow 18.
+# The `finally` removes all five containers rather than only the two long-lived ones — the note
+# there explains why the guards' `--rm` is not sufficient — which is what put 90 s of the total
+# above into that last line.
 # PROBE_TIMEOUT is the one number here that is not arbitrary: the probe touches no network at all,
 # so its worst case is imports plus a handful of file operations — a couple of seconds — and 120
 # leaves it two full minutes of headroom for a slow `docker exec` on a loaded daemon while still
@@ -337,7 +352,6 @@ FAILED rather than being skipped. Failures leave through SystemExit, never `asse
 """
 
 import asyncio
-import json
 import os
 import shutil
 import tempfile
@@ -487,6 +501,25 @@ STORE_CREDENTIALS = {
 # loudly, and be answered by updating this constant.
 EXPECTED_HANDLERS = {"message": 7, "callback_query": 1}
 
+# The five commands `CalendarBot._advertise_commands()` builds, copied from it verbatim. They are
+# rebuilt here because of WHERE they are built in the real program: `start()` logs the startup
+# marker FIRST and only then calls `_advertise_commands()`, which constructs these five
+# `types.BotCommand` objects BEFORE it makes any request. The outer half's check (g) deliberately
+# looks for tracebacks only in the log BEFORE the marker — everything after it is the unreachable
+# Telegram call it points the container at — so a `BotCommand` that stopped constructing (a renamed
+# field, a new required one, a stricter validator in a bumped aiogram) would raise a pydantic
+# ValidationError in the part of the log the gate does not read, and the image would ship green and
+# then restart-loop in production one line past "Starting bot...".
+# Checking `hasattr(aiogram.types, "BotCommand")` does not close that: the class can be present and
+# still reject this call. So the objects are actually constructed here, in the hermetic half.
+EXPECTED_BOT_COMMANDS = [
+    ("start", "Начать работу"),
+    ("google", "Настройка Google Calendar"),
+    ("fastmail", "Настройка FastMail"),
+    ("caldav", "Настройка CalDAV"),
+    ("stats", "Показать статистику использования"),
+]
+
 # aiogram's Dispatcher registers ONE handler of its own on its `update` observer in its constructor
 # (`_listen_update`), and this bot registers nothing there, so the observer is skipped when counting.
 # Note that src/bot.py hangs its handlers straight off the Dispatcher rather than off a sub-router,
@@ -538,22 +571,34 @@ def check_working_directory():
 
 
 def check_no_dotenv():
-    """No .env may be baked into the image.
+    """No .env may be baked into the image, at either of the two places load_dotenv() looks.
 
-    `get_settings()` opens with `load_dotenv()`, which reads a `.env` from the working directory. An
-    image carrying one would hand BOT_TOKEN and the LLM keys to every container started from it —
+    `get_settings()` opens with `load_dotenv()`, which reads a `.env` from the image. An image
+    carrying one would hand BOT_TOKEN and the LLM keys to every container started from it —
     somebody's own credentials, published — and would silently disable the startup guard that the
     outer half's check (b) is built on. .dockerignore lists `.env` for exactly this; the check is
     here because a Dockerfile edit could undo that without touching .dockerignore.
+
+    BOTH paths are checked, and the order is the point. Bare `load_dotenv()` walks UP from the
+    directory of the CALLING module — src/config.py — so it looks at /app/src first and only then
+    at /app. A file at /app/src/.env would therefore win over one at /app, and checking only the
+    latter would leave the more-likely-to-be-missed location uncovered. Neither is reachable today
+    (the Dockerfile copies `src/*.py`, not `src/`), which is exactly why the check has to be
+    written for the Dockerfile somebody edits next rather than for this one.
     """
-    target = "no .env file is baked into {}".format(APP_DIR)
-    path = os.path.join(APP_DIR, ".env")
-    if not os.path.exists(path):
-        return [(target, None)]
-    return [(target, (
-        "{!r} exists in the image. get_settings() calls load_dotenv(), so this file is read at "
-        "startup: it can ship a developer's own bot token and LLM keys inside a published image, "
-        "and it makes the missing-variable guard unreachable".format(path)))]
+    rows = []
+    for directory in (APP_DIR, os.path.join(APP_DIR, "src")):
+        path = os.path.join(directory, ".env")
+        target = "no .env file is baked into {}".format(directory)
+        if not os.path.exists(path):
+            rows.append((target, None))
+            continue
+        rows.append((target, (
+            "{!r} exists in the image. get_settings() calls load_dotenv(), which searches upwards "
+            "from src/config.py and so reads this file at startup: it can ship a developer's own "
+            "bot token and LLM keys inside a published image, and it makes the missing-variable "
+            "guard unreachable".format(path))))
+    return rows
 
 
 def check_data_dir():
@@ -861,9 +906,14 @@ async def check_bot_construction():
         ", ".join("{} {}".format(count, name) for name, count in sorted(EXPECTED_HANDLERS.items())))
     provider_target = "...and get_llm() built the provider LLM_PROVIDER asked for"
     wiring_target = "...and it holds a CalendarManager and a UserManager"
-    every_target = (build_target, handlers_target, provider_target, wiring_target)
+    commands_target = "...and the {} BotCommand objects start() builds after the marker construct".format(
+        len(EXPECTED_BOT_COMMANDS))
+    entry_target = "...and set_my_commands/start_polling are still callable on this aiogram"
+    every_target = (build_target, handlers_target, provider_target, wiring_target,
+                    commands_target, entry_target)
 
     try:
+        from aiogram import types
         from src.bot import CalendarBot
     except Exception as error:
         reason = "src.bot could not be imported: {}".format(describe(error))
@@ -914,6 +964,46 @@ async def check_bot_construction():
                 "reach a calendar and the credential store".format(calendar_name, users_name))))
         else:
             rows.append((wiring_target, None))
+
+        # The one piece of startup that happens AFTER the log marker and before any network call —
+        # see the note on EXPECTED_BOT_COMMANDS. Built here rather than trusted, because the outer
+        # half's check (g) cannot see a traceback from this code: it lands past the marker, in the
+        # part of the log that legitimately contains the refused Telegram call.
+        try:
+            built = [types.BotCommand(command=name, description=text)
+                     for name, text in EXPECTED_BOT_COMMANDS]
+        except Exception as error:
+            rows.append((commands_target, (
+                "constructing them raised {}. _advertise_commands() builds exactly these five "
+                "immediately after start() logs its first line, so this is an image that comes up, "
+                "prints 'Starting bot...' and then dies — in a place the log-based check cannot "
+                "see, on a tag production follows automatically".format(describe(error)))))
+        else:
+            wrong = [(c.command, c.description) for c in built
+                     if (c.command, c.description) not in EXPECTED_BOT_COMMANDS]
+            if len(built) != len(EXPECTED_BOT_COMMANDS) or wrong:
+                rows.append((commands_target, (
+                    "they built but do not round-trip: got {!r}. A field that is silently dropped "
+                    "or renamed leaves Telegram advertising the wrong command list".format(
+                        [(c.command, c.description) for c in built]))))
+            else:
+                rows.append((commands_target, None))
+
+        # Existence only, and the limit is worth stating rather than dressing up: both of these are
+        # declared with *args / optional keyword parameters, so an `inspect.signature().bind()`
+        # test would accept almost any call and prove nothing. What a hermetic check CAN settle is
+        # that the two names start() calls still exist and are callable on the aiogram that is
+        # actually installed — which is what a rename in a major bump looks like from in here. A
+        # changed parameter MEANING is out of reach for this gate and is left to the release notes.
+        missing = [attr for attr, holder in (("set_my_commands", bot.bot), ("start_polling", bot.dp))
+                   if not callable(getattr(holder, attr, None))]
+        if missing:
+            rows.append((entry_target, (
+                "{} is missing or not callable. start() calls both, one line after the log marker "
+                "the outer half gates on, so losing either produces a container that logs "
+                "'Starting bot...' and then falls over".format(", ".join(missing)))))
+        else:
+            rows.append((entry_target, None))
         return rows
     except Exception as error:
         rows.append(("the CalendarBot construction check ran to completion",
@@ -1232,7 +1322,8 @@ def check_probe(name, started):
     bad run with `os._exit(1)`, and the marker row is what catches it.
     """
     target = "the in-container probe's exit status agrees with its own report"
-    marker_target = "the in-container probe ran to its end"
+    marker_target = "the in-container probe ran to its end, reporting all {} targets".format(
+        EXPECTED_PROBE_TARGETS)
     if not started:
         return [("the in-container probe", "not attempted: the container never started")], ""
 
@@ -1265,11 +1356,28 @@ def check_probe(name, started):
     else:
         rows.append((target, None))
 
-    rows.append((marker_target, None if PROBE_MARKER in output else (
-        "it never printed {!r}. The marker is on the probe's last line, so its absence means the "
-        "program did not run to the end — a truncated stdin, something that killed the interpreter "
-        "mid-report, or get_settings() calling os._exit(1) on what should have been a valid "
-        "environment".format(PROBE_MARKER))))
+    # Exact, not a substring of the marker alone: see the note on EXPECTED_PROBE_TARGETS.
+    expected_line = "{}: {}/{} targets".format(
+        PROBE_MARKER, EXPECTED_PROBE_TARGETS, EXPECTED_PROBE_TARGETS)
+    if expected_line in output:
+        rows.append((marker_target, None))
+    elif PROBE_MARKER not in output:
+        rows.append((marker_target, (
+            "it never printed {!r}. The marker is on the probe's last line, so its absence means "
+            "the program did not run to the end — a truncated stdin, something that killed the "
+            "interpreter mid-report, or get_settings() calling os._exit(1) on what should have "
+            "been a valid environment".format(PROBE_MARKER))))
+    else:
+        # It finished, but with a different number of verdicts than this gate expects. That is a
+        # gate that has quietly started proving less, which is the failure mode nothing else here
+        # can see: every row it DID print says ok, and the exit status is 0.
+        summary = [line for line in output.splitlines() if line.startswith(PROBE_MARKER)]
+        rows.append((marker_target, (
+            "it ran to the end but reported {!r} instead of {} targets. Either a check stopped "
+            "emitting rows — in which case this gate is now proving less than it says it does and "
+            "nothing else would have noticed — or one was added and EXPECTED_PROBE_TARGETS in this "
+            "file needs updating".format(
+                summary[0] if summary else "(unparseable)", EXPECTED_PROBE_TARGETS))))
     return rows, output
 
 
@@ -1302,14 +1410,23 @@ def check_real_command(image, name):
     Bot, the LLM provider, the calendar manager, the user manager and all eight handler
     registrations — and then awaits `start()`, whose FIRST statement logs STARTUP_MARKER.
 
-    So the marker is a receipt for the whole of startup, and it is also the last thing that can be
-    asserted on. `start()` continues straight into `_advertise_commands()` ->
-    `bot.set_my_commands(...)`, which is a REQUEST to Telegram. This gate points
-    TELEGRAM_BOT_API_SERVER at 127.0.0.1:1, so that request is refused instantly and the process
-    dies with a traceback. That traceback is the EXPECTED outcome, which is why the traceback check
-    below looks only at the part of the log BEFORE the marker — everything that could go wrong with
-    the IMAGE has already happened by then, and everything after it is a network that was never
-    meant to answer.
+    So the marker is a receipt for CONSTRUCTION, and the traceback check below looks only at the
+    log BEFORE it. The reason is that `start()` continues into `_advertise_commands()` ->
+    `bot.set_my_commands(...)`, a REQUEST to Telegram; this gate points TELEGRAM_BOT_API_SERVER at
+    127.0.0.1:1, so it is refused instantly and the process dies with a traceback that is the
+    EXPECTED outcome. Reading the whole log would make that expected failure indistinguishable from
+    a real one.
+
+    BE PRECISE ABOUT WHAT THAT LEAVES UNCOVERED, because an earlier version of this comment was
+    not, and the imprecision was the hole. Everything after the marker is NOT "a network that was
+    never meant to answer": `_advertise_commands()` first CONSTRUCTS five `types.BotCommand`
+    objects, and only then makes the request. An aiogram bump that renamed a field or added a
+    required one would raise there — past the marker, in the part this check cannot read — and the
+    image would pass this gate and then restart-loop in production one line after "Starting
+    bot...". That gap is closed in the hermetic probe, which builds the same five objects
+    (EXPECTED_BOT_COMMANDS) where a failure IS visible. The alternative — requiring the
+    post-marker traceback to name a specific aiogram exception — is deliberately not taken: it
+    would tie this gate to a third party's wording, which this file avoids everywhere else.
 
     Splitting the log at the marker is also what makes this check deterministic rather than a race
     against how fast the connection is refused. There is no polling window in which the container
@@ -1459,10 +1576,18 @@ def main():
         transcripts.append(("the image started with its own CMD", cmd_logs))
         rows.extend(cmd_rows)
     finally:
-        # The workflow removes both again under `if: always()`, which covers the case where this
-        # whole script is killed by the step timeout and never gets here. The three guard containers
-        # were started with `--rm` and have exited by now, so they are not repeated here.
+        # ALL FIVE, the three guard containers included. An earlier version of this block skipped
+        # them on the grounds that they were started with `--rm` and had exited by now — which
+        # contradicts the reasoning the rest of this file is built on: `--rm` disposes of a
+        # container that EXITED, and the case cleanup exists for is the one that did not. When
+        # GUARD_TIMEOUT fires inside docker() it kills the docker CLIENT on the runner, not the
+        # container on the daemon, so a hung guard survives its own `--rm` and would sit here
+        # pinning the image until somebody noticed.
+        # The workflow removes the same five again under `if: always()`, which covers the case
+        # where this whole script is killed by the step timeout and never reaches this block.
         remove_container(name + CMD_SUFFIX)
+        for case in GUARD_CASES:
+            remove_container(name + case["suffix"])
         remove_container(name)
 
     # The transcripts first, the verdicts last: in a CI log the verdicts are what somebody scrolls
