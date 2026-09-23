@@ -10,10 +10,11 @@ def get_settings():
     # Provider-specific API keys with fallback to legacy key
     deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
     groq_api_key = os.getenv("GROQ_API_KEY")
+    glm_api_key = os.getenv("GLM_API_KEY")
 
     # Ensure at least one API key is available
-    if not deepseek_api_key and not groq_api_key:
-        logger.error("At least one API key must be set: DEEPSEEK_API_KEY, GROQ_API_KEY")
+    if not deepseek_api_key and not groq_api_key and not glm_api_key:
+        logger.error("At least one API key must be set: DEEPSEEK_API_KEY, GROQ_API_KEY, GLM_API_KEY")
         os._exit(1)
 
     telegram_token = os.getenv("BOT_TOKEN")
@@ -25,12 +26,15 @@ def get_settings():
 
     timezone = os.getenv("TZ", "Europe/Moscow")
 
-    # Which LLM provider to use: "deepseek" (default), "groq", etc.
-    llm_provider = os.getenv("LLM_PROVIDER", "groq")
+    # Which LLM provider to use: "glm" (default), "groq", "deepseek".
+    llm_provider = os.getenv("LLM_PROVIDER", "glm")
 
     default_models = {
         "deepseek": "deepseek-reasoner",
         "groq": "openai/gpt-oss-120b",
+        # glm-4.6v is multimodal and handles image+text in one request; its text-only sibling
+        # glm-4.6 rejects images, so there is a single model for both paths.
+        "glm": "glm-4.6v",
     }
 
     if llm_provider not in default_models:
@@ -58,6 +62,7 @@ def get_settings():
     return {
         "deepseek_api_key": deepseek_api_key,
         "groq_api_key": groq_api_key,
+        "glm_api_key": glm_api_key,
         "model": model,
         "telegram_token": telegram_token,
         "telegram_bot_api_server": telegram_bot_api_server,

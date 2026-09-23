@@ -76,15 +76,16 @@ services:
       TELEGRAM_BOT_API_SERVER: XXX        # base URL of the self-hosted Bot API server
 
       # ── LLM ───────────────────────────────────────────────────────────────────
-      # Both keys are set even though only one provider runs: src/config.py refuses to start unless
-      # at least one is present, and having both means LLM_PROVIDER can be flipped without also
+      # Every key is set even though only one provider runs: src/config.py refuses to start unless
+      # at least one is present, and having them all means LLM_PROVIDER can be flipped without also
       # remembering to add a key.
       DEEPSEEK_API_KEY: XXX
       GROQ_API_KEY: XXX
-      LLM_PROVIDER: groq                  # "deepseek" | "groq"; anything else is refused at startup
+      GLM_API_KEY: XXX                    # Z.ai (api.z.ai), used by LLM_PROVIDER=glm
+      LLM_PROVIDER: glm                   # "glm" | "groq" | "deepseek"; anything else is refused at startup
 
-      # MODEL is not set: config.py picks the per-provider default (openai/gpt-oss-120b for groq),
-      # which is what this deployment wants. Same for DAILY_TOKEN_LIMIT (30000),
+      # MODEL is not set: config.py picks the per-provider default (openai/gpt-oss-120b for groq,
+      # glm-4.6v for glm), which is what this deployment wants. Same for DAILY_TOKEN_LIMIT (30000),
       # MESSAGE_BATCH_TIMEOUT (0.8) and MAX_BATCH_SIZE (30) — all left at their defaults, which is
       # why the smoke gate pins those defaults: here they are not defaults, they are the
       # configuration.

@@ -9,6 +9,7 @@ from loguru import logger
 from .config import get_settings
 from .llm_base import LLMProvider
 from .llm_deepseek import DeepSeekLLM
+from .llm_glm import GLMLLM
 from .llm_groq import GroqLLM
 
 
@@ -21,8 +22,9 @@ def _create_provider_from_settings() -> LLMProvider:
 
     Supported providers (via settings["llm_provider"] or LLM_PROVIDER env):
 
-    - "deepseek" (default): DeepSeekLLM from src.llm_deepseek
+    - "deepseek": DeepSeekLLM from src.llm_deepseek
     - "groq": GroqLLM from src.llm_groq
+    - "glm": GLMLLM from src.llm_glm
     """
     settings = get_settings()
     provider_name = settings.get("llm_provider", "deepseek").lower()
@@ -30,6 +32,10 @@ def _create_provider_from_settings() -> LLMProvider:
     if provider_name == "groq":
         logger.info("Initializing LLM provider: groq")
         return GroqLLM()
+
+    if provider_name == "glm":
+        logger.info("Initializing LLM provider: glm")
+        return GLMLLM()
 
     # Fallback/default
     if provider_name != "deepseek":

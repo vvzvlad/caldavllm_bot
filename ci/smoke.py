@@ -144,15 +144,17 @@ EXPECTED_ENV = "PYTHONUNBUFFERED=1"
 # container. Note the progression: case 2 satisfies the API-key branch so it can reach the token
 # branch, and case 3 satisfies both so it can reach the provider branch.
 #
-# Case 3's fragment includes the REJECTED VALUE, and that is the interesting part of it. The
-# message used to be written stdlib-logging style — `logger.error("...'%s'...", llm_provider, ...)`
-# — while loguru formats with `str.format(*args)` and does no %-interpolation, so the arguments
-# were silently dropped and an operator saw a literal `Unsupported LLM provider '%s'`: enough to
-# know SOMETHING about LLM_PROVIDER was wrong, not enough to know what was rejected, which on a
-# stack carrying several similar variables is most of the diagnosis. src/config.py now uses brace
-# placeholders, and matching on `'nonsense'` here is what keeps it that way — a fragment of only
-# the fixed prefix would go on passing if the interpolation broke again, proving the branch fired
-# but not that its message is of any use.
+# Case 3's fragment includes the REJECTED VALUE and the list of accepted ones, and that is the
+# interesting part of it. The message used to be written stdlib-logging style — `logger.error(
+# "...'%s'...", llm_provider, ...)` — while loguru formats with `str.format(*args)` and does no
+# %-interpolation, so the arguments were silently dropped and an operator saw a literal
+# `Unsupported LLM provider '%s'`: enough to know SOMETHING about LLM_PROVIDER was wrong, not
+# enough to know what was rejected, which on a stack carrying several similar variables is most of
+# the diagnosis. src/config.py now uses brace placeholders, and matching on BOTH interpolated
+# values here is what keeps it that way — a fragment of only the fixed prefix would go on passing
+# if the interpolation broke again, proving the branch fired but not that its message is of any
+# use. The provider list is config.py's default table sorted, so adding a provider is supposed to
+# fail this once, loudly, and be answered by updating this fragment.
 GUARD_CASES = [
     {
         "suffix": "-noenv",
@@ -183,7 +185,7 @@ GUARD_CASES = [
             "GROQ_API_KEY=smoke-not-a-real-key",
             "LLM_PROVIDER=nonsense",
         ],
-        "fragment": "Unsupported LLM provider 'nonsense'",
+        "fragment": "Unsupported LLM provider 'nonsense'. Allowed providers: deepseek, glm, groq",
         "branch": (
             "the provider branch, the last of the three and the only one that can be reached with "
             "every required variable present. Without it a typo in LLM_PROVIDER would be caught "
@@ -198,10 +200,11 @@ GUARD_CASES = [
 #     `Bot.__init__` (digits, a colon, then a tail of legal characters) and raises before any
 #     network call, so a token like "smoke" would fail `CalendarBot()` construction for a reason
 #     that has nothing to do with the image;
-#   * both LLM keys are set, as production sets them, so `get_settings()` takes the branch
-#     production takes. Neither is ever used to make a request: nothing in this gate calls the LLM;
-#   * LLM_PROVIDER=groq matches the deployment, so `get_llm()` builds the provider production
-#     builds rather than the default one nobody runs;
+#   * all three LLM keys are set, as production sets them, so `get_settings()` takes the branch
+#     production takes. None is ever used to make a request: nothing in this gate calls the LLM;
+#   * LLM_PROVIDER=glm matches the deployment, so `get_llm()` builds the provider production
+#     builds. It has to be pinned here rather than left to the default, because the image is also
+#     built for pull requests that may predate the deployment's own switch;
 #   * TELEGRAM_BOT_API_SERVER points at 127.0.0.1:1 — inside the container, on a port nothing
 #     binds. It is set rather than left out on purpose: production sets it, so this makes
 #     `CalendarBot.__init__` take the custom-server branch instead of the api.telegram.org default
@@ -213,8 +216,9 @@ GUARD_CASES = [
 SMOKE_ENV = [
     "BOT_TOKEN=123456789:AAFakeSmokeTokenNotReal_0123456789abc",
     "DEEPSEEK_API_KEY=smoke-not-a-real-key",
+    "GLM_API_KEY=smoke-not-a-real-key",
     "GROQ_API_KEY=smoke-not-a-real-key",
-    "LLM_PROVIDER=groq",
+    "LLM_PROVIDER=glm",
     "TELEGRAM_BOT_API_SERVER=http://127.0.0.1:1",
     "TZ=Europe/Moscow",
 ]
@@ -262,7 +266,7 @@ PROBE_MARKER = "caldavllm_bot smoke probe ok"
 # still print the marker, still exit 0, and still look like a full pass. Requiring the exact
 # `N/N` turns "fewer things were checked" into a red build. Adding a check is supposed to fail this
 # once, loudly, and be answered by updating this number.
-EXPECTED_PROBE_TARGETS = 44
+EXPECTED_PROBE_TARGETS = 45
 
 # The prefix put in front of every row the probe reported, so the merged report says where each
 # verdict was decided. Without it a reader of thirty result lines cannot tell which of them were
@@ -333,11 +337,12 @@ PROBE = r'''
 
 It is HERMETIC: not one line of it opens a socket to anything outside the container, and it never
 calls the LLM. That is a requirement rather than a nicety, because this gate has to be runnable on
-a pull request, where no credential for Telegram, for Groq, for DeepSeek or for anybody's calendar
-exists and none should. What it therefore checks is everything about this image that can be decided
-without a peer: that the code imports, that the third-party symbols it calls are really there, that
-the settings function returns what the rest of the app indexes into, that the credential store
-round-trips through a real file, and that the bot object can be built with its full handler set.
+a pull request, where no credential for Telegram, for GLM, for Groq, for DeepSeek or for anybody's
+calendar exists and none should. What it therefore checks is everything about this image that can
+be decided without a peer: that the code imports, that the third-party symbols it calls are really
+there, that the settings function returns what the rest of the app indexes into, that the
+credential store round-trips through a real file, and that the bot object can be built with its
+full handler set.
 
 REPORTING IS STREAMED — each verdict is printed the moment it is decided, rather than collected and
 printed at the end. That differs from the sibling gate in asakusa-tg-print, and the reason is
@@ -379,6 +384,7 @@ SRC_MODULES = [
     "src.calendar",
     "src.llm_base",
     "src.llm_deepseek",
+    "src.llm_glm",
     "src.llm_groq",
     "src.llm",
     "src.bot",
@@ -400,7 +406,8 @@ THIRD_PARTY_SYMBOLS = [
     ]),
     # src/calendar.py builds a DAVClient for every calendar operation.
     ("caldav", ["DAVClient"]),
-    # src/llm_groq.py and src/llm_deepseek.py both build an AsyncClient and catch these two.
+    # src/llm_groq.py, src/llm_glm.py and src/llm_deepseek.py all build an AsyncClient and catch
+    # these two.
     ("httpx", ["AsyncClient", "TimeoutException", "RequestError"]),
     # Every module logs through the singleton.
     ("loguru", ["logger"]),
@@ -414,12 +421,12 @@ THIRD_PARTY_SYMBOLS = [
     ("pytz", ["timezone", "utc"]),
 ]
 
-# src/llm.py is a facade: it re-exports both provider classes so that `from src.llm import
+# src/llm.py is a facade: it re-exports every provider class so that `from src.llm import
 # DeepSeekLLM` keeps working (tests/test_llm.py does exactly that), and src/llm_base.py declares the
-# Protocol both providers are checked against. Neither is exercised by importing src.llm alone — a
+# Protocol the providers are checked against. Neither is exercised by importing src.llm alone — a
 # facade that lost one of its re-exports still imports perfectly well — so they get their own row.
 FACADE_SYMBOLS = [
-    ("src.llm", ["DeepSeekLLM", "GroqLLM", "get_llm"]),
+    ("src.llm", ["DeepSeekLLM", "GLMLLM", "GroqLLM", "get_llm"]),
     ("src.llm_base", ["LLMProvider"]),
 ]
 
@@ -431,6 +438,7 @@ EXPECTED_SETTINGS_KEYS = [
     "caldav",
     "daily_token_limit",
     "deepseek_api_key",
+    "glm_api_key",
     "groq_api_key",
     "llm_provider",
     "max_batch_size",
@@ -443,11 +451,11 @@ EXPECTED_SETTINGS_KEYS = [
 # the numbers the service runs on in production, because the deployment sets none of the optional
 # variables that would override them — so a default that drifted would change live behaviour
 # without anybody editing the stack. `model` is the interesting one: it comes from config.py's
-# per-provider default table, so this row also proves the table still maps "groq" to the model the
+# per-provider default table, so this row also proves the table still maps "glm" to the model the
 # deployment expects to be billed for.
 EXPECTED_DEFAULTS = [
-    ("llm_provider", "groq"),
-    ("model", "openai/gpt-oss-120b"),
+    ("llm_provider", "glm"),
+    ("model", "glm-4.6v"),
     ("daily_token_limit", 30000),
     ("batch_timeout", 0.8),
     ("max_batch_size", 30),
@@ -466,6 +474,7 @@ REQUIRED_ENV = {
 OPTIONAL_ENV = [
     "DAILY_TOKEN_LIMIT",
     "DEEPSEEK_API_KEY",
+    "GLM_API_KEY",
     "LLM_PROVIDER",
     "MAX_BATCH_SIZE",
     "MESSAGE_BATCH_TIMEOUT",
@@ -675,7 +684,7 @@ def check_third_party_symbols():
 
 
 def check_facade_symbols():
-    """(c) src.llm still re-exports both providers, and src.llm_base still declares the Protocol."""
+    """(c) src.llm still re-exports every provider, and src.llm_base still declares the Protocol."""
     rows = []
     for module_name, symbols in FACADE_SYMBOLS:
         target = "{} still exports {}".format(module_name, ", ".join(symbols))
@@ -945,12 +954,12 @@ async def check_bot_construction():
         else:
             rows.append((handlers_target, None))
 
-        # The container runs with LLM_PROVIDER=groq, the value production runs with, so this also
+        # The container runs with LLM_PROVIDER=glm, the value production runs with, so this also
         # proves config.py's provider table and llm.py's dispatch still agree with each other.
         provider_name = type(getattr(bot, "llm", None)).__name__
-        if provider_name != "GroqLLM":
+        if provider_name != "GLMLLM":
             rows.append((provider_target, (
-                "it built a {} while LLM_PROVIDER is groq. src/llm.py falls back to DeepSeek for "
+                "it built a {} while LLM_PROVIDER is glm. src/llm.py falls back to DeepSeek for "
                 "anything it does not recognise, so a broken mapping does not raise — it quietly "
                 "bills the wrong API".format(provider_name))))
         else:
