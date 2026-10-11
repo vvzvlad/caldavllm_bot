@@ -1,60 +1,39 @@
 # Deploy record. Production does not build this service — it pulls the prebuilt image that
 # .gitea/workflows/image-check-publish.yml publishes, and it follows the `:latest` tag.
 #
-# Updates are driven by Portainer's own image updater: it polls the tag above and redeploys when
-# the digest behind it moves. Nothing between the registry and this container asks a human
-# anything, which is exactly why the smoke gate in CI sits BETWEEN `docker build` and
-# `docker push` — an image that reaches `:latest` is an image that is already on its way in.
+# Portainer's image updater polls that tag and redeploys when its digest moves, with no human in
+# between; that is why the CI smoke gate sits between `docker build` and `docker push`.
 #
 # This is a long-polling Telegram bot. It opens no listening socket, so there is nothing to route
 # and nothing to health-check over HTTP — no reverse-proxy labels, no `ports:`, no `healthcheck:`.
 #
-# THIS FILE IS A RECORD OF WHAT RUNS, not a template for a fresh install. The volume below is
-# declared `external`, so `docker compose up` from this file expects that volume to already exist
-# and fails loudly if it does not. README.md carries a self-contained compose block for anybody
-# deploying their own copy; that one creates its own volume and is the right starting point.
+# This file records what runs; it is not a template for a fresh install. The volume below is
+# `external`, so `docker compose up` fails if it does not already exist. README.md carries a
+# self-contained compose block for deploying your own copy.
 #
 # Every value below is a PLACEHOLDER (XXX) or a non-secret default. Real tokens, keys and addresses
-# live only in the deployment's own environment and are never committed here — this repository is
-# public and mirrored.
+# live only in the deployment's own environment — this repository is public and mirrored.
 #
-# ── Two things noticed while transcribing the running stack ────────────────────────────────────
+# The deployed container also sets CALDAV_TIMEZONE, which nothing reads (src/config.py reads only
+# TZ); it is not reproduced here and can be deleted from the deployment.
 #
-# 1. The deployed container sets CALDAV_TIMEZONE, and it does nothing at all. Commit 94e4146
-#    renamed that variable to TZ and src/config.py has read only TZ ever since; the old name was
-#    left behind in the stack and nothing reads it. It is deliberately NOT reproduced below —
-#    carrying it forward would keep suggesting there are two timezone knobs when there is one — but
-#    it is worth deleting from the deployment too, so nobody edits it expecting an effect. Both
-#    names currently hold the same value there, so removing it changes nothing.
-#
-# 2. `restart: unless-stopped` below is what the container actually runs, and it differs from the
-#    `always` used elsewhere in this fleet. The difference shows up exactly once, in the worst
-#    moment: `unless-stopped` leaves a container that an operator stopped by hand stopped across a
-#    daemon restart, `always` brings it back. Recorded as deployed rather than normalised to the
-#    convention, because this file's job is to say what is running; changing the policy is a
-#    deliberate act for the deployment, not a side effect of writing it down.
+# `restart: unless-stopped` is what the container runs, unlike the `always` used elsewhere in this
+# fleet: a container stopped by hand stays stopped across a daemon restart. Recorded as deployed;
+# changing it is a decision for the deployment.
 
-# The compose project name, and it is load-bearing rather than decorative — see the volume note
-# below. It is recorded here because a deploy record that omits it is not a record: the project
-# name is what turns every short name in this file into the real object on the host.
-# Be aware of its precedence, though: a top-level `name:` is the LOWEST-priority source there is.
-# `-p`, COMPOSE_PROJECT_NAME and Portainer (which names the project after the stack) all override
-# it. So it documents the intent; it does not enforce it. The enforcement is in the volume.
+# The compose project name: it turns every short name in this file into the real object on the
+# host. A top-level `name:` has the lowest priority (`-p`, COMPOSE_PROJECT_NAME and Portainer's
+# stack name override it), so it documents the intent; the volume below enforces it.
 name: telegram_bots
 
 volumes:
-  # One JSON file per user, holding that user's CalDAV username and password in PLAIN TEXT — this
-  # volume is other people's calendar credentials, and losing it means every user has to run
-  # /caldav again with a fresh app password.
+  # One JSON file per user, holding that user's CalDAV username and password in PLAIN TEXT —
+  # losing this volume means every user has to run /caldav again with a fresh app password.
   #
-  # Declared `external` with its FULL real name, and that is the whole point of this block. Docker
-  # composes a short volume name with the project name to form the real one, so a stack deployed
-  # under any name other than the one above would resolve `caldavllm_bot` to a NEW, EMPTY volume
-  # while the real one sat there untouched and unreferenced. Nothing would fail: the bot would come
-  # up perfectly healthy and simply ask every user to configure their calendar again — the quietest
-  # possible way to lose the only state this service has.
-  # Naming it absolutely removes the dependency on the project name entirely, and converts that
-  # silent data loss into a loud "external volume not found" before the container ever starts.
+  # Declared `external` with its FULL real name. Compose prefixes short volume names with the
+  # project name, so under any other project name `caldavllm_bot` would resolve to a new, empty
+  # volume and the bot would quietly ask every user to reconfigure. The absolute name turns that
+  # into a loud "external volume not found" before the container starts.
   caldavllm_bot:
     external: true
     name: telegram_bots_caldavllm_bot
@@ -101,8 +80,7 @@ services:
         max-size: 10m
     labels:
       # Opts this container in to automatic redeployment when `:latest` moves. The key is
-      # watchtower's for historical reasons — watchtower itself is long gone from this fleet — and
-      # the label is now read by Portainer's own native image updater, which kept the old key so
-      # that nothing had to be relabelled. Keep it in step with the tag on the `image:` line above:
-      # an updater pointed at a tag CI never moves is an updater that silently does nothing.
+      # watchtower's, but it is read by Portainer's native image updater, which accepts it. Keep it in
+      # step with the tag on the `image:` line above: an updater pointed at a tag CI never moves
+      # silently does nothing.
       com.centurylinklabs.watchtower.enable: "true"
