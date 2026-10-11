@@ -1,86 +1,55 @@
 """Smoke gate for the caldavllm_bot image, run on the CI runner against an already-built image.
 
-It is split in two, and the split is the thing to understand before changing anything here.
+It is split in two:
 
 The OUTER half is this file: a plain `python3 ci/smoke.py` on the runner that drives `docker`
-against the tag it is given in $SMOKE_IMAGE. It answers the questions that are about the
-container as an object — what `docker inspect` says its CMD, WORKDIR and environment are, how the
-image behaves when the variables it needs are missing or wrong, whether a container is still alive
-when everything else is done, and what the image writes to its log when started with its REAL
-command. None of those can be answered from a process already running inside it.
+against the tag in $SMOKE_IMAGE. It covers the container as an object — what `docker inspect`
+says its CMD, WORKDIR and environment are, how the image behaves when variables are missing or
+wrong, whether a container is still alive at the end, and what the image logs when started with
+its REAL command.
 
-The INNER half is the PROBE below: a program that lives here as a string constant and is fed to
-`docker exec -i <name> python -u -`. It answers everything that is about the code INSIDE the image
-— that every module imports, that the third-party symbols the code actually calls are present,
-that `get_settings()` really returns the settings the rest of the app indexes into, that
-`UserManager` really writes and reads credentials on a real filesystem, and that `CalendarBot` can
-be constructed with its full handler set. It runs inside for two reasons. The obvious one is that
-those objects only exist in there. The other is the one that shapes this whole file: **this job
-and the docker daemon are not in the same network namespace.** Gitea's act_runner executes the job
-inside its own job container while the `docker` CLI it provides drives a daemon that lives outside
-it, so nothing here may assume it can reach a container by address.
+The INNER half is the PROBE below, a string constant fed to `docker exec -i <name> python -u -`.
+It covers the code inside the image — every module imports, the third-party symbols the code
+calls exist, `get_settings()` returns the expected settings, `UserManager` round-trips
+credentials on a real filesystem, and `CalendarBot` constructs with its full handler set. It runs
+inside because those objects only exist there, and because act_runner runs this job in its own
+container while `docker` drives a daemon outside it: nothing here may reach a container by address.
 
-NO PORT IS PUBLISHED by anything in this file, and for this service that is not even a trade-off:
-the bot is a long-polling Telegram client and has no listening socket at all. There is nothing to
-publish and nothing to curl, so the whole gate is built out of `docker inspect`, `docker logs` and
-one `docker exec`. Publishing one would not have worked anyway — the port would land in the host
-daemon's network namespace, which this job cannot reach.
+No port is published: the bot is a long-polling Telegram client with no listening socket, so the
+gate is built from `docker inspect`, `docker logs` and one `docker exec`. `docker exec` propagates
+the probe's exit status, which lets the outer half tell "the probe reported failures" from "the
+probe died before reporting".
 
-`docker exec -i <name> python -u -` is the mechanism the fleet already uses: `-i` attaches stdin
-without asking for a tty, the image's own interpreter runs the program, and `docker exec`
-propagates the command's exit status — which is what lets the outer half tell "the probe reported
-failures" from "the probe died before it could report anything".
+The runner image ships `python3` but no bare `python`, so the workflows call `python3
+ci/smoke.py`; inside the container the interpreter is `python`. The outer side uses only the
+standard library.
 
-The runner's job image (`docker.gitea.com/runner-images:ubuntu-latest`) ships /usr/bin/python3;
-note that it ships `python3` and NOT a bare `python`, which is why both workflows invoke this as
-`python3 ci/smoke.py`. Inside the container it is the other way round — the image's own interpreter
-is `python` — and this file invokes it accordingly. Nothing beyond the standard library is imported
-on the outer side; the probe imports this repo's own modules and the six pinned wheels in
-requirements.txt, which is exactly the point of running it in there.
+There is no test job in either workflow: tests/test_llm.py needs API_KEY and calls a live, paid
+LLM, so it is run by hand. This gate is everything between a commit and production:
 
-Why this gate carries the whole load
-------------------------------------
-There is no test job in either workflow, and that is deliberate rather than an oversight. The one
-test module in this repo, tests/test_llm.py, has an autouse fixture that fails without an API_KEY
-in the environment and then calls the real `parse_calendar_event()` against a live LLM — it is a
-paid, non-deterministic, integration-grade check of parsing QUALITY, not a unit suite. Running it
-on every push would spend money to produce a red build whenever a model felt differently about a
-sentence. The full reasoning is at the top of both files in .gitea/workflows/.
-
-So everything that stands between a commit and production is below, and every check is written
-against a way this image has a realistic chance of shipping broken:
-
-* (a) the image's declared contract: CMD, WORKDIR, no ENTRYPOINT — and PYTHONUNBUFFERED. WORKDIR
-  is not cosmetic: `UserManager.data_dir` is the RELATIVE string "data", so a moved working
-  directory silently puts every user's CalDAV credentials somewhere that is not the mounted
-  volume. PYTHONUNBUFFERED is what makes check (b) possible at all; see its note below. Outer half.
-* (b) the startup guard still fires AND still says why, in all three of its branches. Outer half —
-  it needs `docker run` with a deliberately broken environment.
+* (a) the image's declared contract: CMD, WORKDIR, no ENTRYPOINT, and PYTHONUNBUFFERED. WORKDIR
+  matters because `UserManager.data_dir` is the RELATIVE path "data"; a moved working directory
+  would put users' CalDAV credentials outside the mounted volume. Outer half.
+* (b) the startup guard fires AND says why, in all three of its branches. Outer half.
 * (c) the code inside the image imports, and the third-party symbols its call sites use exist.
   Probe.
 * (d) `get_settings()` returns a real settings dict with the documented defaults, and does NOT
   kill the process on a valid environment. Probe.
 * (e) `UserManager` round-trips CalDAV credentials through a real file. Probe.
 * (f) `CalendarBot` constructs with all eight handlers registered. Probe.
-* (g) the image's real CMD gets through import and construction. Outer half — it needs
-  `docker run` with the image's own command and `docker logs`.
+* (g) the image's real CMD gets through import and construction. Outer half.
 * (h) the container the probe ran in is still alive afterwards. Outer half.
 
-Nothing here holds a credential or reaches an external service. Every value is invented by this
-file: a syntactically valid but fake bot token, fake API keys, and a loopback address on a port
-nothing listens on for the Telegram API server. A gate that needed the deployment's real token
-could not run on a pull request at all, and one that reddened on somebody else's outage is a gate
-everybody learns to ignore.
+Nothing here holds a credential or reaches an external service: a syntactically valid but fake
+bot token, fake API keys, and a loopback port nothing listens on for the Telegram API server.
 
-Two properties matter and are easy to lose, so they are stated where they can be checked:
+Two properties are easy to lose:
 
-* Failures leave through SystemExit, never `assert` — on both sides of the split. Asserts vanish
-  under PYTHONOPTIMIZE=1, which would silently turn this gate permanently green.
-* Every check runs before the run is judged, so one run shows the full extent of the breakage
-  instead of only the first broken thing. A check that CANNOT run reports itself as FAILED; it is
-  never quietly skipped, which is the classic way a gate keeps reporting success while proving
-  less and less. The probe's own report lines are parsed back into this gate's report, so a
-  failure inside the container is one row in the same list as a failure outside it.
+* Failures leave through SystemExit, never `assert`, on both sides — asserts vanish under
+  PYTHONOPTIMIZE=1.
+* Every check runs before the run is judged, so one run shows all breakage. A check that CANNOT
+  run reports itself as FAILED, never skipped. The probe's report lines are parsed back into this
+  gate's report.
 """
 
 import json
@@ -99,20 +68,15 @@ IMAGE_ENV = "SMOKE_IMAGE"
 NAME_ENV = "SMOKE_NAME"
 
 # The five containers this gate starts, by suffix on $SMOKE_NAME:
-#   ""          the long-lived one the probe runs inside. It is started with a sleeping command
-#               rather than the image's own, because the image's own command talks to Telegram.
+#   ""          the long-lived one the probe runs inside, started with a sleeping command because
+#               the image's own command talks to Telegram.
 #   -noenv      guard case 1 for check (b): no environment at all.
 #   -notoken    guard case 2: an LLM key but no BOT_TOKEN.
 #   -provider   guard case 3: a complete environment with an unknown LLM_PROVIDER.
 #   -cmd        the one started with the image's REAL command for check (g).
-# All five are NAMED rather than left to docker's random name generator, and the reason is the one
-# case that matters: `subprocess` hitting its timeout kills the docker CLIENT on the runner, not
-# the container on the daemon. With no name nobody could ever remove the survivor — not
-# remove_container() here, not the workflow's `if: always()` step — and it would go on pinning the
-# image, so the `docker rmi` at the end of the job would fail too, be swallowed by its `|| true`,
-# and leave both a container and a few hundred MB of image on the daemon the whole fleet shares.
-# Kept in step with the suffix list in both workflows' cleanup steps: if you move one, move the
-# others.
+# All five are named: a `subprocess` timeout kills the docker client, not the container, and only a
+# name lets remove_container() and the workflow's `if: always()` step remove the survivor.
+# Keep in step with the suffix list in both workflows' cleanup steps.
 CMD_SUFFIX = "-cmd"
 
 # The Dockerfile's WORKDIR and CMD, and the data directory that resolves against that WORKDIR.
@@ -123,38 +87,23 @@ APP_DIR = "/app"
 EXPECTED_CMD = ["python", "main.py"]
 DATA_DIR = "/app/data"
 
-# The one environment variable the image itself must declare. It is checked here — rather than
-# only being set in the Dockerfile and hoped for — because check (b) below is built entirely on
-# matching the TEXT the startup guard prints, and that text reaches `docker logs` only if it was
-# flushed before `os._exit(1)` threw the process away without running interpreter shutdown. The
-# full mechanism is written out in the Dockerfile next to the ENV line. Dropping the variable would
-# not fail loudly on its own — it would make an operator's diagnosis of "why is this container
-# exiting 1" depend on the internals of whatever logging library is installed that month — so it
-# is asserted here, in the same file as the checks that consume it.
+# The one environment variable the image itself must declare. Check (b) matches the TEXT the
+# startup guard prints, which reaches `docker logs` only if it was flushed before `os._exit(1)`;
+# the Dockerfile explains the mechanism next to the ENV line.
 EXPECTED_ENV = "PYTHONUNBUFFERED=1"
 
-# The three ways a real deployment gets its environment wrong, each with the fragment of THIS
-# REPO'S OWN wording that `get_settings()` prints in reply. They are separate containers rather
-# than one, because src/config.py checks them in this order and stops at the first failure: with no
-# environment at all only the API-key branch is ever reached, so a BOT_TOKEN guard that had
-# silently stopped working would be invisible behind it. One case per branch is what makes each
-# branch individually provable.
+# The three ways a real deployment gets its environment wrong, each with the fragment of this
+# repo's own wording that `get_settings()` prints in reply. Separate containers, because
+# src/config.py checks them in order and stops at the first failure: with no environment only the
+# API-key branch is reached, so one case per branch is what proves each branch.
 #
-# `env` is what gets passed with `-e`; everything absent from it is genuinely absent in that
-# container. Note the progression: case 2 satisfies the API-key branch so it can reach the token
-# branch, and case 3 satisfies both so it can reach the provider branch.
+# `env` is what gets passed with `-e`; everything else is absent. Case 2 satisfies the API-key
+# branch to reach the token branch; case 3 satisfies both to reach the provider branch.
 #
-# Case 3's fragment includes the REJECTED VALUE and the list of accepted ones, and that is the
-# interesting part of it. The message used to be written stdlib-logging style — `logger.error(
-# "...'%s'...", llm_provider, ...)` — while loguru formats with `str.format(*args)` and does no
-# %-interpolation, so the arguments were silently dropped and an operator saw a literal
-# `Unsupported LLM provider '%s'`: enough to know SOMETHING about LLM_PROVIDER was wrong, not
-# enough to know what was rejected, which on a stack carrying several similar variables is most of
-# the diagnosis. src/config.py now uses brace placeholders, and matching on BOTH interpolated
-# values here is what keeps it that way — a fragment of only the fixed prefix would go on passing
-# if the interpolation broke again, proving the branch fired but not that its message is of any
-# use. The provider list is config.py's default table sorted, so adding a provider is supposed to
-# fail this once, loudly, and be answered by updating this fragment.
+# Case 3's fragment includes the rejected value and the list of accepted ones, so the check fails
+# if the message's interpolation breaks (loguru uses str.format, not %-style). The provider list is
+# config.py's default table sorted: adding a provider fails this once and is answered by updating
+# the fragment.
 GUARD_CASES = [
     {
         "suffix": "-noenv",
@@ -195,24 +144,17 @@ GUARD_CASES = [
 ]
 
 # The environment both the probe container and the real-CMD container run with. Every value is
-# invented here, and each one is chosen so that nothing can reach anything:
-#   * the token is fake but SYNTACTICALLY valid. aiogram validates the shape of the token in
-#     `Bot.__init__` (digits, a colon, then a tail of legal characters) and raises before any
-#     network call, so a token like "smoke" would fail `CalendarBot()` construction for a reason
-#     that has nothing to do with the image;
-#   * all three LLM keys are set, as production sets them, so `get_settings()` takes the branch
-#     production takes. None is ever used to make a request: nothing in this gate calls the LLM;
-#   * LLM_PROVIDER=glm matches the deployment, so `get_llm()` builds the provider production
-#     builds. It has to be pinned here rather than left to the default, because the image is also
-#     built for pull requests that may predate the deployment's own switch;
-#   * TELEGRAM_BOT_API_SERVER points at 127.0.0.1:1 — inside the container, on a port nothing
-#     binds. It is set rather than left out on purpose: production sets it, so this makes
-#     `CalendarBot.__init__` take the custom-server branch instead of the api.telegram.org default
-#     that no deployment uses. Loopback rather than a hostname is deliberate for check (g): a name
-#     would put the RUNNER's resolver in the loop, and a resolver that answers everything (a
-#     captive portal, a hijacking upstream) would turn an instant refusal into a minute of connect
-#     timeout;
-#   * TZ matches the deployment. It only ever reaches the `caldav.timezone` settings key.
+# invented here so that nothing can reach anything:
+#   * the token is fake but SYNTACTICALLY valid: aiogram validates its shape in `Bot.__init__`
+#     and would otherwise fail `CalendarBot()` construction for an unrelated reason;
+#   * all three LLM keys are set, as production sets them, so `get_settings()` takes the same
+#     branch. Nothing in this gate calls the LLM;
+#   * LLM_PROVIDER=glm matches the deployment, so `get_llm()` builds the provider production builds;
+#   * TELEGRAM_BOT_API_SERVER points at 127.0.0.1:1, a port nothing binds inside the container.
+#     Production sets it, so `CalendarBot.__init__` takes the custom-server branch. Loopback
+#     rather than a hostname keeps the runner's resolver out of check (g), so the refusal is
+#     instant;
+#   * TZ matches the deployment. It only reaches the `caldav.timezone` settings key.
 SMOKE_ENV = [
     "BOT_TOKEN=123456789:AAFakeSmokeTokenNotReal_0123456789abc",
     "DEEPSEEK_API_KEY=smoke-not-a-real-key",
@@ -232,32 +174,24 @@ SMOKE_ENV = [
 # is removed in a `finally` regardless, and the workflow removes it again under `if: always()`.
 IDLE_COMMAND = ["python", "-c", "import time; time.sleep(900)"]
 
-# The first line the bot logs, from `CalendarBot.start()`. It is a receipt for CONSTRUCTION, and
-# for construction only — that is the precise claim, and the imprecise version of it left a real
-# hole in this gate for a while, so it is worth being exact. main.py builds `CalendarBot()` before
-# start() runs, and that constructor is where `get_settings()` (the guard), the aiogram Bot (token
-# validation), the LLM provider, the CalendarManager, the UserManager (which creates data/ under
-# the real WORKDIR) and all eight handler registrations happen. All of that is proven by this line
-# appearing.
+# The first line the bot logs, from `CalendarBot.start()`. It is a receipt for CONSTRUCTION only:
+# main.py builds `CalendarBot()` before start() runs, and that constructor is where `get_settings()`
+# (the guard), the aiogram Bot (token validation), the LLM provider, the CalendarManager, the
+# UserManager (which creates data/ under the real WORKDIR) and all eight handler registrations happen.
 #
-# What it does NOT cover is the rest of start(). `_advertise_commands()` runs immediately after,
-# and it constructs five `types.BotCommand` objects BEFORE it makes any request — so an aiogram
-# bump that changed that class would raise past this marker, in the stretch of the log check (g)
-# deliberately does not read (see its docstring). That residue is covered in the hermetic probe
-# instead, by EXPECTED_BOT_COMMANDS, which builds the same five objects.
+# It does NOT cover the rest of start(): `_advertise_commands()` constructs five `types.BotCommand`
+# objects before its request, past this marker where check (g) does not read. That is covered in
+# the probe by EXPECTED_BOT_COMMANDS.
 #
-# This is still the LAST thing check (g) can assert on, and that is worth stating so nobody adds
-# more: `_advertise_commands()` ends in `bot.set_my_commands(...)`, a REQUEST to Telegram. Against
-# 127.0.0.1:1 it is refused instantly and the process dies with a traceback. That traceback is
-# EXPECTED, which is exactly why the split exists.
+# This is the last thing check (g) can assert on: `_advertise_commands()` ends in
+# `bot.set_my_commands(...)`, a request to Telegram that 127.0.0.1:1 refuses instantly, and the
+# resulting traceback is EXPECTED.
 STARTUP_MARKER = "Starting bot..."
 
-# Printed by the probe on its last line and nowhere else. DECLARED TWICE — here and again inside
-# the PROBE text — and the two have to keep agreeing. The duplication is deliberate: interpolating
-# it into the probe would mean `.format()` on a body that contains braces of its own, which would
-# quietly turn the probe into a template that no longer runs as-is — and being able to paste that
-# block into a container by hand and have it work is most of why it is a plain string. A drift
-# costs a false RED (the outer half reports a probe that never finished), never a false green.
+# Printed by the probe on its last line and nowhere else. Declared twice — here and inside the
+# PROBE text — and the two must agree. Interpolating it would mean `.format()` on a body with its
+# own braces, and the probe must stay pasteable into a container by hand. A drift costs a false
+# RED, never a false green.
 PROBE_MARKER = "caldavllm_bot smoke probe ok"
 
 # How many verdicts the probe is expected to produce. Pinned rather than merely counted, because
@@ -273,13 +207,10 @@ EXPECTED_PROBE_TARGETS = 45
 # taken from inside the container and which from the runner.
 PROBE_ROW_PREFIX = "[in-container] "
 
-# Bounds. Every docker call gets one, because a gate that hangs is worse than a gate that fails: it
-# holds a slot on a runner the whole fleet queues for until the step timeout kills it, and a killed
-# step never runs its cleanup.
-# The numbers are generous against the real cost — this image starts in a second or two — and are
-# sized for a shared runner under load right after a build. Their worst-case SUM is what the smoke
-# step's `timeout-minutes` in both workflows has to exceed, so it is spelled out here, in the order
-# the calls actually happen:
+# Bounds. Every docker call gets one: a hung gate holds a shared runner slot until the step timeout
+# kills it, and a killed step never runs its cleanup.
+# The numbers are generous against the real cost (the image starts in a second or two). Their
+# worst-case SUM must stay under the smoke step's `timeout-minutes` in both workflows:
 #     30 (inspect config)
 #   + 3 x (30 rm + 90 run) = 360   (the three guard cases)
 #   + 30 (rm probe)     + 60 (probe run -d)  + 120 (docker exec: the probe)
@@ -288,16 +219,10 @@ PROBE_ROW_PREFIX = "[in-container] "
 #   + 30 (inspect cmd state)
 #   + 150 (the `finally`: 30 cmd + 3 x 30 guards + 30 probe)
 #   = 945 s, a little under 16 minutes. Both workflows allow 18.
-# The `finally` removes all five containers rather than only the two long-lived ones — the note
-# there explains why the guards' `--rm` is not sufficient — which is what put 90 s of the total
-# above into that last line.
-# PROBE_TIMEOUT is the one number here that is not arbitrary: the probe touches no network at all,
-# so its worst case is imports plus a handful of file operations — a couple of seconds — and 120
-# leaves it two full minutes of headroom for a slow `docker exec` on a loaded daemon while still
-# fitting the sum above inside the step timeout.
-# Five of these `rm`s are pre-run cleanups: every container this gate starts is removed by name
-# before it is started, so a re-run from the UI — which keeps the same run id, hence the same
-# $SMOKE_NAME — cannot die on "name already in use".
+# PROBE_TIMEOUT: the probe touches no network, so its worst case is a couple of seconds; 120 leaves
+# headroom for a slow `docker exec` on a loaded daemon.
+# Every container is removed by name before it is started, so a re-run from the UI (same run id,
+# same $SMOKE_NAME) cannot fail on "name already in use".
 INSPECT_TIMEOUT = 30
 REMOVE_TIMEOUT = 30
 GUARD_TIMEOUT = 90
@@ -318,20 +243,14 @@ STARTUP_PAUSE = 0.5
 EXCERPT_CHARS = 4000
 
 
-# The program fed to `python -u -` inside the container under test. It lives here as a string
-# rather than as a second file so that this gate stays one artifact: the workflows already pass it
-# nothing but an image tag and a container name, and a second file is a second thing to forget to
-# copy when this repo's CI is cloned into the next one.
+# The program fed to `python -u -` inside the container under test. It is a string rather than a
+# second file so the gate stays one artifact.
 #
-# `-u` is not decoration: this stdout is a pipe, and CPython block-buffers those. A normal exit
-# flushes (SystemExit included, so a self-reported failure is never lost), but a probe killed by
-# PROBE_TIMEOUT would otherwise take every line it had already printed down with it — in exactly
-# the run whose output is the only thing left to diagnose from.
+# `-u` matters: stdout is a pipe, and a probe killed by PROBE_TIMEOUT would otherwise lose every
+# buffered line in the one run whose output is needed for diagnosis.
 #
-# It takes NO parameters. Everything it needs is already in the container's environment, because
-# `docker exec` runs with the environment the container was created with — the very values
-# SMOKE_ENV above passed to `docker run`. The only thing declared on both sides is PROBE_MARKER,
-# and the note on it above explains why that one is copied rather than interpolated.
+# It takes no parameters: `docker exec` runs with the environment the container was created with,
+# i.e. SMOKE_ENV. The only value declared on both sides is PROBE_MARKER.
 PROBE = r'''
 """Runs INSIDE a container of the caldavllm_bot image, fed to `python -u -` over stdin.
 
@@ -1212,24 +1131,18 @@ def check_image_contract(image):
 def check_missing_env_guard(image, base_name):
     """(b) Run the image with three different broken environments: each must die, and say why.
 
-    This is the check that cannot live inside a container, and the one that most directly describes
-    a real deployment failure — the stack redeployed with a variable dropped out of it, or with a
-    typo in one. The mechanism is `get_settings()` in src/config.py, called from
-    `CalendarBot.__init__` before anything else happens: it logs one line and calls `os._exit(1)`.
+    This models the stack redeployed with a variable dropped or mistyped. The mechanism is
+    `get_settings()` in src/config.py, called first in `CalendarBot.__init__`: it logs one line
+    and calls `os._exit(1)`. It fires only if the image carries no `.env` file for `load_dotenv()`
+    to read; the probe checks for that, and .dockerignore keeps it out.
 
-    That it fires at all depends on the image carrying no `.env` file, which `load_dotenv()` would
-    otherwise read; the probe checks for exactly that, and .dockerignore is what keeps it out.
+    The OUTPUT is matched, not only the exit code: a bad import, a missing wheel or a syntax error
+    also exit non-zero. One case per branch — see the note on GUARD_CASES.
 
-    A non-zero exit on its own is NOT enough, and that is the whole reason the OUTPUT is matched
-    too: a typo in an import, a missing wheel and a syntax error all exit non-zero, and every one
-    of them would make an exit-code-only check pass while proving nothing about the guard. One case
-    per branch, because src/config.py stops at the first failure — see the note on GUARD_CASES.
+    The image's own CMD is kept; the guard makes it terminate on its own.
 
-    The image's own CMD is kept — no override. That is safe to run to completion precisely because
-    the guard makes it terminate on its own.
-
-    `--rm` AND a name: the flag covers the container that exits, the name covers the one that does
-    not. See the suffix note at the top of this file for why the second half is not redundant.
+    `--rm` AND a name: the flag covers the container that exits, the name covers the one that
+    does not.
     """
     rows = []
     transcripts = []
@@ -1272,14 +1185,11 @@ def check_missing_env_guard(image, base_name):
 def start_probe_container(image, name):
     """Start the container the probe runs inside.
 
-    NO PORT IS PUBLISHED — this service has no listening socket at all, so there is nothing to
-    publish, and a job that runs inside act_runner's container while docker drives the host's daemon
-    could not have reached one anyway.
+    No port is published: the service has no listening socket.
 
-    The image's CMD is REPLACED with a sleeping command, and that is deliberate rather than
-    convenient: the real command reaches Telegram a few lines into startup, so a container started
-    with it would be on its way out while the probe was still importing. Check (g) below starts a
-    second container with the real command, which is where that question is answered.
+    The image's CMD is replaced with a sleeping command: the real command reaches Telegram a few
+    lines into startup and would exit while the probe was still importing. Check (g) runs the real
+    command in a second container.
     """
     rows = []
     target = "`docker run -d` starts a probe container of {}".format(image)
@@ -1323,12 +1233,10 @@ def probe_report_rows(output):
 def check_probe(name, started):
     """(c)-(f) Run the in-container probe and merge its verdicts into ours.
 
-    `docker exec -i <name> python -u -` feeds the program over stdin: `-i` attaches stdin without
-    asking for a tty (none is needed and none is available on a runner), the image's own interpreter
-    runs it, and `docker exec` propagates the command's exit status — which is what lets the two
-    consistency rows below tell "the probe reported failures" apart from "the probe died before it
-    could report anything". The second of those is not hypothetical here: `get_settings()` ends a
-    bad run with `os._exit(1)`, and the marker row is what catches it.
+    `docker exec -i <name> python -u -` feeds the program over stdin (`-i` without a tty) and
+    propagates its exit status, which lets the two consistency rows below tell "the probe reported
+    failures" from "the probe died before reporting". The second case is real: `get_settings()` ends
+    a bad run with `os._exit(1)`, and the marker row catches it.
     """
     target = "the in-container probe's exit status agrees with its own report"
     marker_target = "the in-container probe ran to its end, reporting all {} targets".format(
@@ -1414,44 +1322,26 @@ def check_container_alive(name, started):
 def check_real_command(image, name):
     """(g) The image's real CMD gets through import and construction.
 
-    This is the only check that runs the thing production runs, and its shape is dictated by what
-    main.py actually does. In order: it constructs `CalendarBot()` — the startup guard, the aiogram
-    Bot, the LLM provider, the calendar manager, the user manager and all eight handler
-    registrations — and then awaits `start()`, whose FIRST statement logs STARTUP_MARKER.
+    This is the only check that runs what production runs. main.py constructs `CalendarBot()` — the
+    startup guard, the aiogram Bot, the LLM provider, the calendar manager, the user manager and all
+    eight handler registrations — and then awaits `start()`, whose first statement logs
+    STARTUP_MARKER.
 
-    So the marker is a receipt for CONSTRUCTION, and the traceback check below looks only at the
-    log BEFORE it. The reason is that `start()` continues into `_advertise_commands()` ->
-    `bot.set_my_commands(...)`, a REQUEST to Telegram; this gate points TELEGRAM_BOT_API_SERVER at
-    127.0.0.1:1, so it is refused instantly and the process dies with a traceback that is the
-    EXPECTED outcome. Reading the whole log would make that expected failure indistinguishable from
-    a real one.
+    So the marker is a receipt for CONSTRUCTION, and the traceback check looks only at the log
+    before it: `start()` continues into `bot.set_my_commands(...)`, which 127.0.0.1:1 refuses, and
+    the resulting traceback is EXPECTED. The five `types.BotCommand` objects built just before that
+    request are past the marker; the probe covers them (EXPECTED_BOT_COMMANDS). Requiring a specific
+    aiogram exception after the marker would tie the gate to third-party wording.
 
-    BE PRECISE ABOUT WHAT THAT LEAVES UNCOVERED, because an earlier version of this comment was
-    not, and the imprecision was the hole. Everything after the marker is NOT "a network that was
-    never meant to answer": `_advertise_commands()` first CONSTRUCTS five `types.BotCommand`
-    objects, and only then makes the request. An aiogram bump that renamed a field or added a
-    required one would raise there — past the marker, in the part this check cannot read — and the
-    image would pass this gate and then restart-loop in production one line after "Starting
-    bot...". That gap is closed in the hermetic probe, which builds the same five objects
-    (EXPECTED_BOT_COMMANDS) where a failure IS visible. The alternative — requiring the
-    post-marker traceback to name a specific aiogram exception — is deliberately not taken: it
-    would tie this gate to a third party's wording, which this file avoids everywhere else.
+    Splitting the log at the marker also makes the check deterministic: the question is only what
+    the container logged before reaching the network, and `docker logs` answers that for an exited
+    container too.
 
-    Splitting the log at the marker is also what makes this check deterministic rather than a race
-    against how fast the connection is refused. There is no polling window in which the container
-    is "supposed to still be up": the question is only ever what it managed to log before it got to
-    the network, and `docker logs` answers that just as happily for a container that has already
-    exited.
+    The container's fate after that call is not a verdict (a retry loop around start() would be a
+    legitimate change); its final state is printed into the transcript.
 
-    What is deliberately NOT a verdict is the container's fate after that call. Matching the exit
-    code, or the text of the error aiogram raises, would tie this gate to a third party's wording
-    and to a design decision that is legitimately allowed to change — a retry loop around start()
-    would be a perfectly sensible improvement and would turn an exit-code check red for no reason.
-    The container's final state IS printed into the transcript below, so the information is one
-    scroll away when somebody needs it; it is just not a verdict.
-
-    The container is started detached and WITHOUT `--rm`, so that its state can still be inspected
-    after it has exited.
+    The container is started detached and WITHOUT `--rm`, so its state can be inspected after it
+    exits.
     """
     rows = []
     start_target = "`docker run -d` starts a container of {} with the image's own command".format(
@@ -1543,17 +1433,10 @@ def main():
         raise SystemExit(1)
     name = os.environ.get(NAME_ENV)
     if not name:
-        # No default here either, and this one is worth spelling out because a default would not
-        # fail — it would work, quietly and wrongly, in two ways at once.
-        # First, the cleanup: the workflow's `if: always()` step removes `<name>` and its four
-        # suffixed siblings, and it builds those names from the SAME variable. A dropped or
-        # misspelled `env:` entry would leave this script naming its containers after the fallback
-        # while the cleanup step went looking for the run-id ones, found nothing, and swallowed the
-        # miss in its `|| true` — the gate stays green and the leak is permanent.
-        # Second, collisions: the runner runs one docker daemon for every repository in the fleet,
-        # so a constant fallback means two concurrent runs pick the SAME name — and
-        # remove_container() below would then delete the other run's live container out from under
-        # it.
+        # No default: the workflow's `if: always()` step builds the cleanup names from the SAME
+        # variable, so a fallback name would leak containers past the cleanup while staying green. And
+        # on the shared daemon, a constant fallback would make concurrent runs collide, and
+        # remove_container() would delete another run's live container.
         print("{} is not set: this gate names every container it starts after it, and a default "
               "would both hide containers from the workflow's cleanup step and make two concurrent "
               "runs collide on one name".format(NAME_ENV))
@@ -1585,15 +1468,10 @@ def main():
         transcripts.append(("the image started with its own CMD", cmd_logs))
         rows.extend(cmd_rows)
     finally:
-        # ALL FIVE, the three guard containers included. An earlier version of this block skipped
-        # them on the grounds that they were started with `--rm` and had exited by now — which
-        # contradicts the reasoning the rest of this file is built on: `--rm` disposes of a
-        # container that EXITED, and the case cleanup exists for is the one that did not. When
-        # GUARD_TIMEOUT fires inside docker() it kills the docker CLIENT on the runner, not the
-        # container on the daemon, so a hung guard survives its own `--rm` and would sit here
-        # pinning the image until somebody noticed.
-        # The workflow removes the same five again under `if: always()`, which covers the case
-        # where this whole script is killed by the step timeout and never reaches this block.
+        # ALL FIVE, the guard containers included: `--rm` disposes of a container that EXITED, but when
+        # GUARD_TIMEOUT fires inside docker() it kills the docker client, not the container, so a hung
+        # guard survives its `--rm`. The workflow removes the same five again under `if: always()`, for
+        # a run killed by the step timeout before reaching this block.
         remove_container(name + CMD_SUFFIX)
         for case in GUARD_CASES:
             remove_container(name + case["suffix"])

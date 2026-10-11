@@ -39,9 +39,7 @@ def get_settings():
 
     if llm_provider not in default_models:
         # Brace placeholders, not %s: loguru formats with str.format(*args) and does no
-        # %-interpolation, so the "%s" this line used to carry was never substituted — the
-        # operator saw a literal `Unsupported LLM provider '%s'` and had to guess which value was
-        # rejected. src/llm_groq.py and src/llm_deepseek.py log through stdlib `logging`, where
+        # %-interpolation. src/llm_groq.py and src/llm_glm.py log through stdlib `logging`, where
         # %-style IS correct; both conventions live in this repo and must not be swapped.
         logger.error(
             "Unsupported LLM provider '{}'. Allowed providers: {}",
